@@ -1,0 +1,26 @@
+{
+  "name": "@workslo/fleet",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Fleet V1 shared project control plane",
+  "scripts": {
+    "types": "wrangler types",
+    "typecheck": "tsc --noEmit && tsc --project worker/test/tsconfig.json --noEmit && tsc --project tsconfig.node.json --noEmit",
+    "test": "vitest run",
+    "build": "vite build",
+    "deploy:dry": "wrangler deploy --dry-run",
+    "check": "npm run types && npm run typecheck && npm test && npm run deploy:dry"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "1.1.2",
+    "@types/node": "26.4.0",
+    "typescript": "7.0.2",
+    "vite": "8.2.2",
+    "vitest": "4.1.11",
+    "wrangler": "4.127.1"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}
