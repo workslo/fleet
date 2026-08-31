@@ -107,6 +107,16 @@ export interface FleetRoutineResult {
   inboundRequests: WorkRequestSummary[];
   /** 4. What Pull Candidates have been published? */
   pullCandidates: PullCandidate[];
+  /**
+   * Activity events in the consumed cursor window.
+   *
+   * reconcile() advances the shared cursor past these events. Without
+   * exposing them here, getActivity() (which shares the same CursorStore)
+   * would never be able to retrieve them — the cursor has already moved.
+   * This is the "reconcile destroys activity" bug: events fetched but
+   * dropped, cursor advanced past them, no path to recover.
+   */
+  activity: ActivityEvent[];
   /** The cursor to persist for the next run (already persisted by reconcile). */
   cursor: string;
 }
@@ -243,6 +253,7 @@ export class FleetRoutineClient {
       outboundRequests: snapshot.outbound_requests,
       inboundRequests: snapshot.inbound_requests,
       pullCandidates: snapshot.pull_candidates,
+      activity: snapshot.activity,
       cursor: snapshot.next_cursor,
     };
   }

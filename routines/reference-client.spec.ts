@@ -731,3 +731,96 @@ describe("FleetRoutineClient — cursor edge cases", () => {
     expect(store.stored).toBe("42");
   });
 });
+
+describe("FleetRoutineClient — reconcile does not destroy activity events", () => {
+  // Regression: Claude's PR #2 review found that reconcile() advanced the
+  // shared cursor past activity events without exposing them in the return
+  // type. getActivity() (which shares the same CursorStore) could then never
+  // retrieve them — the events were fetched, dropped, and made unreachable.
+  // This is the same bug class as the fast-forward guard (b04c41b), in the
+  // opposite direction.
+
+  it("reconcile() exposes activity events from the consumed cursor window", async () => {
+    const store = makeCursorStore();
+    store.stored = "0";
+    const snapshot: AgentWorkSnapshot = {
+      ...emptySnapshot("3"),
+      activity: [
+        { id: 1, type: "project_proposed", actor: { id: "codex" }, project_id: "proj-1", created_at: "2026-08-31T00:00:00Z" },
+        { id: 2, type: "request_created", actor: { id: "codex" }, project_id: "proj-1", created_at: "2026-08-31T00:00:01Z" },
+        { id: 3, type: "request_accepted", actor: { id: "juniorslo" }, project_id: "proj-1", created_at: "2026-08-31T00:00:02Z" },
+      ],
+    };
+    const fetchFn = makeFetch((url) => {
+      if (url.includes("/v1/me/work")) return { status: 200, body: snapshot };
+      return { status: 404, body: { error: "not_found" } };
+    });
+    const client = makeClient(fetchFn, store);
+
+    const result = await client.reconcile();
+
+    // Activity events must be exposed on the result, not silently dropped
+    expect(result.activity).toHaveLength(3);
+    expect(result.activity[0]?.id).toBe(1);
+    expect(result.activity[2]?.id).toBe(3);
+  });
+
+  it("reconcile() then getActivity() does not lose events (the probed scenario)", async () => {
+    const store = makeCursorStore();
+    store.stored = "0";
+
+    // Stub server: /v1/me/work holds events 1–3, /v1/activity returns events
+    // after the cursor. After reconcile() advances cursor to 3, getActivity()
+    // should see only new events (4+), NOT re-get 1–3.
+    let activityAfterCursor = (after: string) => {
+      const all = [
+        { id: 1, type: "project_proposed", actor: { id: "codex" }, project_id: "proj-1", created_at: "2026-08-31T00:00:00Z" },
+        { id: 2, type: "request_created", actor: { id: "codex" }, project_id: "proj-1", created_at: "2026-08-31T00:00:01Z" },
+        { id: 3, type: "request_accepted", actor: { id: "juniorslo" }, project_id: "proj-1", created_at: "2026-08-31T00:00:02Z" },
+      ];
+      const n = parseInt(after, 10);
+      return all.filter((e) => e.id > n);
+    };
+
+    const fetchFn = makeFetch((url) => {
+      if (url.includes("/v1/me/work")) {
+        const events = activityAfterCursor("0");
+        return {
+          status: 200,
+          body: {
+            ...emptySnapshot("3"),
+            activity: events,
+          },
+        };
+      }
+      if (url.includes("/v1/activity")) {
+        const afterMatch = url.match(/after=(\d+)/);
+        const after = afterMatch?.[1] ?? "0";
+        const events = activityAfterCursor(after);
+        return {
+          status: 200,
+          body: { activity: events, next_cursor: events.length > 0 ? String(events[events.length - 1]!.id) : after },
+        };
+      }
+      return { status: 404, body: { error: "not_found" } };
+    });
+    const client = makeClient(fetchFn, store);
+
+    // Step 1: reconcile() consumes events 1–3, advances cursor to 3
+    const reconcileResult = await client.reconcile();
+    expect(reconcileResult.activity).toHaveLength(3);
+    expect(store.stored).toBe("3");
+
+    // Step 2: getActivity() reads from cursor 3 — should see NO events
+    // (nothing new since reconcile). The events 1–3 are NOT lost because
+    // they were exposed on reconcileResult.activity.
+    const activityResult = await client.getActivity();
+    expect(activityResult.activity).toHaveLength(0);
+
+    // The combined view (reconcile activity + getActivity activity) = 3 events
+    // Before the fix, reconcile dropped activity and getActivity saw nothing
+    // — total 0 events from a window that contained 3.
+    const totalEvents = reconcileResult.activity.length + activityResult.activity.length;
+    expect(totalEvents).toBe(3);
+  });
+});
