@@ -162,6 +162,29 @@ describe("Fleet work reconciliation", () => {
     expect(await replay.json()).toEqual(await first.json());
   });
 
+  it("does not write accept side effects or replay success for a concurrent loser", async () => {
+    const project = await activeProject();
+    const requested = await postAs("codex", `/v1/projects/${project.id}/requests`, {
+      recipient_id: "claude",
+      title: "Accept concurrently",
+      detail: "Only one acceptance may win",
+    });
+    const request = (await requested.json()) as { id: string };
+    const before = await getAs("claude", "/v1/activity");
+    const baseline = (await before.json()) as { next_cursor: string };
+    const keys = [crypto.randomUUID(), crypto.randomUUID()];
+    const results = await Promise.all(keys.map((key) => mutateAs("claude", `/v1/requests/${request.id}/accept`, 1, {}, key)));
+    const statuses = results.map((result) => result.status);
+    expect(statuses.filter((status) => status === 200)).toHaveLength(1);
+    const losingKey = keys[statuses.findIndex((status) => status !== 200)] as string;
+
+    const replay = await mutateAs("claude", `/v1/requests/${request.id}/accept`, 1, {}, losingKey);
+    expect(replay.status).not.toBe(200);
+    const activity = await getAs("claude", `/v1/activity?after=${baseline.next_cursor}`);
+    const changes = (await activity.json()) as { activity: Array<{ type: string }> };
+    expect(changes.activity).toEqual([expect.objectContaining({ type: "work_request.accepted" })]);
+  });
+
   it("discharges an accepted request and preserves its fulfillment evidence", async () => {
     const project = await activeProject();
     const requested = await postAs("codex", `/v1/projects/${project.id}/requests`, {
@@ -211,6 +234,36 @@ describe("Fleet work reconciliation", () => {
     expect(await replay.json()).toEqual(await first.json());
     const card = await getAs("claude", `/v1/projects/${project.id}`);
     expect(await card.json()).toMatchObject({ evidence: [{ uri: "https://example.test/retry", summary: "Retry-safe fulfillment" }] });
+  });
+
+  it("does not write fulfill side effects or replay success for a concurrent loser", async () => {
+    const project = await activeProject();
+    const requested = await postAs("codex", `/v1/projects/${project.id}/requests`, {
+      recipient_id: "claude",
+      title: "Fulfill concurrently",
+      detail: "Only one fulfillment may win",
+    });
+    const request = (await requested.json()) as { id: string };
+    await mutateAs("claude", `/v1/requests/${request.id}/accept`, 1, {});
+    const before = await getAs("claude", "/v1/activity");
+    const baseline = (await before.json()) as { next_cursor: string };
+    const keys = [crypto.randomUUID(), crypto.randomUUID()];
+    const evidence = [
+      { uri: "https://example.test/concurrent-a", summary: "Concurrent winner A" },
+      { uri: "https://example.test/concurrent-b", summary: "Concurrent winner B" },
+    ];
+    const results = await Promise.all(keys.map((key, index) => mutateAs("claude", `/v1/requests/${request.id}/fulfill`, 2, { evidence: [evidence[index]] }, key)));
+    const statuses = results.map((result) => result.status);
+    expect(statuses.filter((status) => status === 200)).toHaveLength(1);
+    const loser = statuses.findIndex((status) => status !== 200);
+    const replay = await mutateAs("claude", `/v1/requests/${request.id}/fulfill`, 2, { evidence: [evidence[loser]] }, keys[loser] as string);
+    expect(replay.status).not.toBe(200);
+    const activity = await getAs("claude", `/v1/activity?after=${baseline.next_cursor}`);
+    const changes = (await activity.json()) as { activity: Array<{ type: string }> };
+    expect(changes.activity).toEqual([expect.objectContaining({ type: "work_request.fulfilled" })]);
+    const card = await getAs("claude", `/v1/projects/${project.id}`);
+    const payload = (await card.json()) as { evidence: Array<{ uri: string; summary: string }> };
+    expect(payload.evidence).toEqual([expect.objectContaining(evidence[statuses.indexOf(200)])]);
   });
 
   it("publishes Pull Candidates without creating an obligation", async () => {

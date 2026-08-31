@@ -153,14 +153,14 @@ export async function acceptRequest(request: Request, env: Env, caller: Actor, r
   let replay: D1Result<unknown> | undefined;
   try {
     const results = await env.DB.batch([
-      env.DB.prepare("UPDATE work_requests SET state = 'Accepted', accepted_at = ?, version = version + 1, updated_at = ? WHERE id = ? AND recipient_id = ? AND version = ? AND state = 'Pending'").bind(now, now, requestId, caller.id, version),
-      env.DB.prepare("INSERT INTO activity_events (project_id, actor_id, type, payload_json) SELECT project_id, ?, 'work_request.accepted', ? FROM work_requests WHERE id = ? AND recipient_id = ? AND version = ? AND state = 'Accepted'").bind(caller.id, JSON.stringify({ request_id: requestId }), requestId, caller.id, version + 1),
+      env.DB.prepare("INSERT INTO activity_events (project_id, actor_id, type, payload_json) SELECT project_id, ?, 'work_request.accepted', ? FROM work_requests WHERE id = ? AND recipient_id = ? AND version = ? AND state = 'Pending'").bind(caller.id, JSON.stringify({ request_id: requestId }), requestId, caller.id, version),
       env.DB.prepare(
-        "INSERT INTO idempotency_records (actor_id, idempotency_key, method, path, request_hash, response_status, response_body) SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM work_requests WHERE id = ? AND recipient_id = ? AND version = ? AND state = 'Accepted')",
-      ).bind(caller.id, idempotency.key, request.method, new URL(request.url).pathname, idempotency.hash, 200, responseBody, requestId, caller.id, version + 1),
+        "INSERT INTO idempotency_records (actor_id, idempotency_key, method, path, request_hash, response_status, response_body) SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM work_requests WHERE id = ? AND recipient_id = ? AND version = ? AND state = 'Pending')",
+      ).bind(caller.id, idempotency.key, request.method, new URL(request.url).pathname, idempotency.hash, 200, responseBody, requestId, caller.id, version),
+      env.DB.prepare("UPDATE work_requests SET state = 'Accepted', accepted_at = ?, version = version + 1, updated_at = ? WHERE id = ? AND recipient_id = ? AND version = ? AND state = 'Pending'").bind(now, now, requestId, caller.id, version),
     ]);
-    transition = results[0];
-    replay = results[2];
+    transition = results[2];
+    replay = results[1];
   } catch {
     return error("internal_error", "work request acceptance was not stored", 500);
   }
@@ -188,15 +188,15 @@ export async function fulfillRequest(request: Request, env: Env, caller: Actor, 
   let replay: D1Result<unknown> | undefined;
   try {
     const results = await env.DB.batch([
-      env.DB.prepare("UPDATE work_requests SET state = 'Fulfilled', fulfilled_at = ?, version = version + 1, updated_at = ? WHERE id = ? AND recipient_id = ? AND version = ? AND state = 'Accepted'").bind(now, now, requestId, caller.id, version),
-      ...evidence.map((entry) => env.DB.prepare("INSERT INTO evidence_links (project_id, request_id, actor_id, uri, summary) SELECT project_id, id, ?, ?, ? FROM work_requests WHERE id = ? AND recipient_id = ? AND version = ? AND state = 'Fulfilled'").bind(caller.id, entry.uri, entry.summary, requestId, caller.id, version + 1)),
-      env.DB.prepare("INSERT INTO activity_events (project_id, actor_id, type, payload_json) SELECT project_id, ?, 'work_request.fulfilled', ? FROM work_requests WHERE id = ? AND recipient_id = ? AND version = ? AND state = 'Fulfilled'").bind(caller.id, JSON.stringify({ request_id: requestId, evidence_count: evidence.length }), requestId, caller.id, version + 1),
+      ...evidence.map((entry) => env.DB.prepare("INSERT INTO evidence_links (project_id, request_id, actor_id, uri, summary) SELECT project_id, id, ?, ?, ? FROM work_requests WHERE id = ? AND recipient_id = ? AND version = ? AND state = 'Accepted'").bind(caller.id, entry.uri, entry.summary, requestId, caller.id, version)),
+      env.DB.prepare("INSERT INTO activity_events (project_id, actor_id, type, payload_json) SELECT project_id, ?, 'work_request.fulfilled', ? FROM work_requests WHERE id = ? AND recipient_id = ? AND version = ? AND state = 'Accepted'").bind(caller.id, JSON.stringify({ request_id: requestId, evidence_count: evidence.length }), requestId, caller.id, version),
       env.DB.prepare(
-        "INSERT INTO idempotency_records (actor_id, idempotency_key, method, path, request_hash, response_status, response_body) SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM work_requests WHERE id = ? AND recipient_id = ? AND version = ? AND state = 'Fulfilled')",
-      ).bind(caller.id, idempotency.key, request.method, new URL(request.url).pathname, idempotency.hash, 200, responseBody, requestId, caller.id, version + 1),
+        "INSERT INTO idempotency_records (actor_id, idempotency_key, method, path, request_hash, response_status, response_body) SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM work_requests WHERE id = ? AND recipient_id = ? AND version = ? AND state = 'Accepted')",
+      ).bind(caller.id, idempotency.key, request.method, new URL(request.url).pathname, idempotency.hash, 200, responseBody, requestId, caller.id, version),
+      env.DB.prepare("UPDATE work_requests SET state = 'Fulfilled', fulfilled_at = ?, version = version + 1, updated_at = ? WHERE id = ? AND recipient_id = ? AND version = ? AND state = 'Accepted'").bind(now, now, requestId, caller.id, version),
     ]);
-    transition = results[0];
-    replay = results.at(-1);
+    transition = results.at(-1);
+    replay = results.at(-2);
   } catch {
     return error("internal_error", "work request fulfillment was not stored", 500);
   }
