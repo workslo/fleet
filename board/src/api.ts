@@ -89,6 +89,8 @@ export class FleetApiError extends Error {
 }
 
 export class FleetApi {
+  constructor(private readonly testPrincipal?: string) {}
+
   async portfolio(): Promise<{ projects: ProjectCard[] }> {
     return this.get("/v1/portfolio");
   }
@@ -106,9 +108,11 @@ export class FleetApi {
   }
 
   private async get<T>(path: string): Promise<T> {
+    const headers = new Headers({ Accept: "application/json" });
+    if (this.testPrincipal) headers.set("X-Fleet-Principal", this.testPrincipal);
     let response: Response;
     try {
-      response = await fetch(path, { headers: { Accept: "application/json" }, credentials: "same-origin" });
+      response = await fetch(path, { headers, credentials: "same-origin" });
     } catch {
       throw new FleetApiError("Fleet could not be reached. Check the connection and retry.", 0);
     }

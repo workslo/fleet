@@ -8,4 +8,4 @@ import "./styles.css";
 const root = document.getElementById("root");
 if (!root) throw new Error("Fleet Board root is missing.");
 
-createRoot(root).render(<StrictMode><App principal="current Fleet actor" /></StrictMode>);
+createRoot(root).render(<StrictMode><App /></StrictMode>);
