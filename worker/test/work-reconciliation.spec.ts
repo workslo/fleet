@@ -6,6 +6,7 @@ type RequestOptions = {
   idempotencyKey?: string;
   ifMatch?: number;
   principal?: string;
+  testBarrier?: string;
 };
 
 function apiRequest(path: string, options: RequestOptions = {}): Promise<Response> {
@@ -13,6 +14,7 @@ function apiRequest(path: string, options: RequestOptions = {}): Promise<Respons
   if (options.principal) headers.set("X-Fleet-Principal", options.principal);
   if (options.idempotencyKey) headers.set("Idempotency-Key", options.idempotencyKey);
   if (options.ifMatch !== undefined) headers.set("If-Match", `"${options.ifMatch}"`);
+  if (options.testBarrier) headers.set("X-Fleet-Test-Pre-Batch-Barrier", options.testBarrier);
   if (options.body !== undefined) headers.set("Content-Type", "application/json");
   return exports.default.fetch(`https://fleet.test${path}`, {
     method: options.body === undefined ? "GET" : "POST",
@@ -25,8 +27,8 @@ function postAs(principal: string, path: string, body: unknown, idempotencyKey =
   return apiRequest(path, { body, idempotencyKey, principal });
 }
 
-function mutateAs(principal: string, path: string, ifMatch: number, body: unknown, idempotencyKey = crypto.randomUUID()) {
-  return apiRequest(path, { body, ifMatch, idempotencyKey, principal });
+function mutateAs(principal: string, path: string, ifMatch: number, body: unknown, idempotencyKey = crypto.randomUUID(), testBarrier?: string) {
+  return apiRequest(path, { body, ifMatch, idempotencyKey, principal, ...(testBarrier === undefined ? {} : { testBarrier }) });
 }
 
 function getAs(principal: string, path: string) {
@@ -65,6 +67,13 @@ async function failIdempotencyWrite(idempotencyKey: string) {
     END;
   `).run();
   return () => env.DB.exec(`DROP TRIGGER ${trigger}`);
+}
+
+async function preBatchBarrier() {
+  await env.DB.prepare(
+    "CREATE TABLE IF NOT EXISTS test_pre_batch_barriers (name TEXT PRIMARY KEY, arrivals INTEGER NOT NULL DEFAULT 0, released INTEGER NOT NULL DEFAULT 0)",
+  ).run();
+  return crypto.randomUUID();
 }
 
 describe("Fleet work reconciliation", () => {
@@ -185,6 +194,24 @@ describe("Fleet work reconciliation", () => {
     expect(changes.activity).toEqual([expect.objectContaining({ type: "work_request.accepted" })]);
   });
 
+  it("returns the same stored acceptance response to same-key concurrent callers", async () => {
+    const project = await activeProject();
+    const requested = await postAs("codex", `/v1/projects/${project.id}/requests`, {
+      recipient_id: "claude",
+      title: "Accept with one key",
+      detail: "Same-key callers must converge",
+    });
+    const request = (await requested.json()) as { id: string };
+    const idempotencyKey = crypto.randomUUID();
+    const barrier = await preBatchBarrier();
+    const results = await Promise.all([
+      mutateAs("claude", `/v1/requests/${request.id}/accept`, 1, {}, idempotencyKey, barrier),
+      mutateAs("claude", `/v1/requests/${request.id}/accept`, 1, {}, idempotencyKey, barrier),
+    ]);
+    expect(results.map((result) => result.status)).toEqual([200, 200]);
+    expect(await results[0]?.json()).toEqual(await results[1]?.json());
+  });
+
   it("discharges an accepted request and preserves its fulfillment evidence", async () => {
     const project = await activeProject();
     const requested = await postAs("codex", `/v1/projects/${project.id}/requests`, {
@@ -264,6 +291,26 @@ describe("Fleet work reconciliation", () => {
     const card = await getAs("claude", `/v1/projects/${project.id}`);
     const payload = (await card.json()) as { evidence: Array<{ uri: string; summary: string }> };
     expect(payload.evidence).toEqual([expect.objectContaining(evidence[statuses.indexOf(200)])]);
+  });
+
+  it("returns the same stored fulfillment response to same-key concurrent callers", async () => {
+    const project = await activeProject();
+    const requested = await postAs("codex", `/v1/projects/${project.id}/requests`, {
+      recipient_id: "claude",
+      title: "Fulfill with one key",
+      detail: "Same-key callers must converge",
+    });
+    const request = (await requested.json()) as { id: string };
+    await mutateAs("claude", `/v1/requests/${request.id}/accept`, 1, {});
+    const idempotencyKey = crypto.randomUUID();
+    const body = { evidence: [{ uri: "https://example.test/same-key", summary: "Same-key fulfillment" }] };
+    const barrier = await preBatchBarrier();
+    const results = await Promise.all([
+      mutateAs("claude", `/v1/requests/${request.id}/fulfill`, 2, body, idempotencyKey, barrier),
+      mutateAs("claude", `/v1/requests/${request.id}/fulfill`, 2, body, idempotencyKey, barrier),
+    ]);
+    expect(results.map((result) => result.status)).toEqual([200, 200]);
+    expect(await results[0]?.json()).toEqual(await results[1]?.json());
   });
 
   it("publishes Pull Candidates without creating an obligation", async () => {

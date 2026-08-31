@@ -1,6 +1,7 @@
 export interface Env {
   DB: D1Database;
   FLEET_AUTH_MODE?: string;
+  TEST_PRE_BATCH_BARRIER?: string;
 }
 
 export type Actor = { id: string; display_name: string };

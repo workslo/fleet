@@ -12,6 +12,7 @@ export default defineConfig({
       miniflare: {
         bindings: {
           FLEET_AUTH_MODE: "test",
+          TEST_PRE_BATCH_BARRIER: "enabled",
           TEST_MIGRATIONS: await readD1Migrations(path.join(projectRoot, "worker/migrations")),
         },
       },
