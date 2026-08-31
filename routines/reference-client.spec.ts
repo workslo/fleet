@@ -549,6 +549,26 @@ describe("FleetRoutineClient — read endpoints", () => {
     await client.getActivity("5");
   });
 
+  it("getActivity with explicit cursor does NOT advance the durable cursor (fast-forward guard)", async () => {
+    const store = makeCursorStore();
+    store.stored = "10";
+    const fetchFn = makeFetch((url) => {
+      expect(url).toContain("after=1000");
+      return {
+        status: 200,
+        body: { activity: [], next_cursor: "1000" },
+      };
+    });
+    const client = makeClient(fetchFn, store);
+
+    const result = await client.getActivity("1000");
+    expect(result.next_cursor).toBe("1000");
+
+    // Durable cursor must remain 10 — a historical read must not make
+    // later reconcile() skip unseen activity 11–1000.
+    expect(store.stored).toBe("10");
+  });
+
   it("getDecisions unwraps the { decisions: [...] } envelope", async () => {
     const store = makeCursorStore();
     const fetchFn = makeFetch((url) => {

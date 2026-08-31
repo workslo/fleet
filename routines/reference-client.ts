@@ -345,11 +345,20 @@ export class FleetRoutineClient {
 
   // --- Read endpoints ---
 
-  /** Read activity events after the supplied cursor. */
+  /**
+   * Read activity events after the supplied cursor.
+   *
+   * When called with no argument (the Routine path), reads the stored
+   * cursor and persists the returned next_cursor after a successful read.
+   * When called with an explicit `after` (a historical/ad-hoc read), the
+   * durable cursor is NOT advanced — the caller asked for a specific range
+   * and the routine's bookkeeping must not jump forward.
+   */
   async getActivity(after?: string): Promise<{
     activity: ActivityEvent[];
     next_cursor: string;
   }> {
+    const persist = after === undefined;
     const cursor = after ?? (await this.cursorStore.read()) ?? "0";
     const response = await this.fetchFn(
       `${this.baseUrl}/v1/activity?after=${encodeURIComponent(cursor)}`,
@@ -363,10 +372,14 @@ export class FleetRoutineClient {
       next_cursor: string;
     };
 
-    // Persist cursor AFTER a successful read. Native persistence must
-    // succeed before the cursor advances (contracts/routine-v1.md).
+    // Persist cursor only on the Routine (no-arg) path. Native persistence
+    // must succeed before the cursor advances (contracts/routine-v1.md).
+    // Explicit/historical reads do NOT advance the durable cursor —
+    // getActivity("1000") must not make later reconcile() skip 11–1000.
     // API or persistence failure leaves the prior cursor intact.
-    await this.cursorStore.write(result.next_cursor);
+    if (persist) {
+      await this.cursorStore.write(result.next_cursor);
+    }
 
     return result;
   }
