@@ -184,7 +184,7 @@ describe("FleetRoutineClient — reconcile (the Fleet Routine)", () => {
         {
           id: "pc-1",
           project_id: "proj-1",
-          author: { id: "claude" },
+          actor: { id: "claude" },
           title: "Authority tests",
           detail: "Cross-seat rejection tests",
           created_at: "2026-08-31T00:00:00Z",
@@ -445,7 +445,7 @@ describe("FleetRoutineClient — publishPullCandidate", () => {
         body: {
           id: "pc-2",
           project_id: "proj-1",
-          author: { id: "juniorslo" },
+          actor: { id: "juniorslo" },
           title: "Cursor safety tests",
           detail: "Added tests for cursor-not-advanced-on-failure",
           created_at: "2026-08-31T00:00:00Z",
@@ -466,71 +466,6 @@ describe("FleetRoutineClient — publishPullCandidate", () => {
 });
 
 describe("FleetRoutineClient — read endpoints", () => {
-  it("listProjects calls GET /v1/portfolio", async () => {
-    const store = makeCursorStore();
-    const fetchFn = makeFetch((url) => {
-      expect(url).toBe("https://fleet.test/v1/portfolio");
-      return {
-        status: 200,
-        body: [
-          {
-            id: "proj-1",
-            slug: "fleet-v1-foundation",
-            title: "Fleet V1 Foundation",
-            originator: { id: "shane" },
-            submitter: { id: "shane" },
-            owner: { id: "codex" },
-            proposed_owner: null,
-            state: "Active",
-            health: "On Track",
-            next_action: null,
-            version: 3,
-            envelope: { revision: 1 },
-            plan: { revision: 1, body: "Build the first vertical slice" },
-            evidence: [],
-            updated_at: "2026-08-31 00:00:00",
-          },
-        ],
-      };
-    });
-    const client = makeClient(fetchFn, store);
-
-    const projects = await client.listProjects();
-    expect(projects).toHaveLength(1);
-    expect(projects[0]?.slug).toBe("fleet-v1-foundation");
-  });
-
-  it("getProject calls GET /v1/projects/:id", async () => {
-    const store = makeCursorStore();
-    const fetchFn = makeFetch((url) => {
-      expect(url).toBe("https://fleet.test/v1/projects/proj-1");
-      return {
-        status: 200,
-        body: {
-          id: "proj-1",
-          slug: "fleet-v1-foundation",
-          title: "Fleet V1 Foundation",
-          originator: { id: "shane" },
-          submitter: { id: "shane" },
-          owner: { id: "codex" },
-          proposed_owner: null,
-          state: "Active",
-          health: "On Track",
-          next_action: null,
-          version: 3,
-          envelope: { revision: 1 },
-          plan: { revision: 1, body: "Build" },
-          evidence: [],
-          updated_at: "2026-08-31 00:00:00",
-        },
-      };
-    });
-    const client = makeClient(fetchFn, store);
-
-    const project = await client.getProject("proj-1");
-    expect(project.state).toBe("Active");
-  });
-
   it("getActivity uses the stored cursor when no after is provided", async () => {
     const store = makeCursorStore();
     store.stored = "10";
@@ -559,31 +494,97 @@ describe("FleetRoutineClient — read endpoints", () => {
     expect(result.next_cursor).toBe("11");
   });
 
+  it("getActivity persists the returned cursor through CursorStore", async () => {
+    const store = makeCursorStore();
+    store.stored = "10";
+    const fetchFn = makeFetch(() => ({
+      status: 200,
+      body: { activity: [], next_cursor: "20" },
+    }));
+    const client = makeClient(fetchFn, store);
+
+    await client.getActivity();
+
+    expect(store.stored).toBe("20");
+  });
+
+  it("getActivity does NOT advance the cursor when the API call fails", async () => {
+    const store = makeCursorStore();
+    store.stored = "10";
+    const fetchFn = makeFetch(() => ({
+      status: 500,
+      body: { error: "internal_error", message: "D1 is down" },
+    }));
+    const client = makeClient(fetchFn, store);
+
+    await expect(client.getActivity()).rejects.toThrow(FleetRoutineError);
+
+    expect(store.stored).toBe("10");
+  });
+
+  it("getActivity does NOT advance the cursor when native persistence fails", async () => {
+    const store = makeCursorStore();
+    store.stored = "10";
+    store.writeShouldFail = true;
+    const fetchFn = makeFetch(() => ({
+      status: 200,
+      body: { activity: [], next_cursor: "20" },
+    }));
+    const client = makeClient(fetchFn, store);
+
+    await expect(client.getActivity()).rejects.toThrow("persistence failure");
+
+    expect(store.stored).toBe("10");
+  });
+
   it("getActivity uses the provided cursor when given", async () => {
     const store = makeCursorStore();
     store.stored = "10";
     const fetchFn = makeFetch((url) => {
       expect(url).toContain("after=5");
-      return {
-        status: 200,
-        body: { activity: [], next_cursor: "5" },
-      };
+      return { status: 200, body: { activity: [], next_cursor: "5" } };
     });
     const client = makeClient(fetchFn, store);
 
     await client.getActivity("5");
   });
 
-  it("getDecisions calls GET /v1/decisions", async () => {
+  it("getDecisions unwraps the { decisions: [...] } envelope", async () => {
     const store = makeCursorStore();
     const fetchFn = makeFetch((url) => {
       expect(url).toBe("https://fleet.test/v1/decisions");
-      return { status: 200, body: [] };
+      return {
+        status: 200,
+        body: { decisions: [] },
+      };
     });
     const client = makeClient(fetchFn, store);
 
     const decisions = await client.getDecisions();
     expect(decisions).toEqual([]);
+  });
+
+  it("getDecisions returns records from the envelope", async () => {
+    const store = makeCursorStore();
+    const fetchFn = makeFetch(() => ({
+      status: 200,
+      body: {
+        decisions: [
+          {
+            id: "dec-1",
+            project_id: "proj-1",
+            question: "Should we activate V1?",
+            state: "Open",
+            created_at: "2026-08-31T00:00:00Z",
+          },
+        ],
+      },
+    }));
+    const client = makeClient(fetchFn, store);
+
+    const decisions = await client.getDecisions();
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0]?.id).toBe("dec-1");
   });
 });
 
@@ -641,7 +642,7 @@ describe("FleetRoutineClient — HEARTBEAT/JOURNAL prose exclusion", () => {
     // There is no method that accepts HEARTBEAT or JOURNAL prose.
     // (mutate and parseJson are TypeScript-private internal helpers —
     // compile-time private, but still on the runtime prototype.)
-    const internal = new Set(["constructor", "mutate", "parseJson"]);
+    const internal = new Set(["constructor", "mutate", "parseJson", "throwIfError"]);
     const methods = Object.getOwnPropertyNames(
       Object.getPrototypeOf(client),
     ).filter((m) => !internal.has(m));
@@ -653,8 +654,6 @@ describe("FleetRoutineClient — HEARTBEAT/JOURNAL prose exclusion", () => {
         "fulfillRequest",
         "getActivity",
         "getDecisions",
-        "getProject",
-        "listProjects",
         "publishPullCandidate",
         "reconcile",
       ].sort(),
@@ -693,7 +692,7 @@ describe("FleetRoutineClient — structured error codes", () => {
     const client = makeClient(fetchFn, store);
 
     try {
-      await client.getProject("proj-1");
+      await client.getDecisions();
       expect.fail("should have thrown");
     } catch (e) {
       expect(e).toBeInstanceOf(FleetRoutineError);

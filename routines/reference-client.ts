@@ -63,7 +63,7 @@ export interface WorkRequestSummary {
 export interface PullCandidate {
   id: string;
   project_id: string;
-  author: ActorRef;
+  actor: ActorRef;
   title: string;
   detail: string;
   created_at: string;
@@ -84,24 +84,6 @@ export interface AgentWorkSnapshot {
   pull_candidates: PullCandidate[];
   activity: ActivityEvent[];
   next_cursor: string;
-}
-
-export interface ProjectCard {
-  id: string;
-  slug: string;
-  title: string;
-  originator: ActorRef;
-  submitter: ActorRef;
-  owner: ActorRef | null;
-  proposed_owner: ActorRef | null;
-  state: string;
-  health: string;
-  next_action: string | null;
-  version: number;
-  envelope: { revision: number };
-  plan: { revision: number; body: string };
-  evidence: Array<{ uri: string; summary: string }>;
-  updated_at: string;
 }
 
 export interface DecisionRequest {
@@ -248,24 +230,7 @@ export class FleetRoutineClient {
       { method: "GET", headers: this.authHeaders },
     );
 
-    if (response.status !== 200) {
-      const body = await response.text();
-      // Fleet API errors have shape { error: "machine_readable_code", message: "..." }
-      let code = "reconcile_failed";
-      let message = `GET /v1/me/work returned ${response.status}: ${body}`;
-      try {
-        const parsed = JSON.parse(body) as { error?: string; message?: string };
-        if (typeof parsed.error === "string") {
-          code = parsed.error;
-        }
-        if (typeof parsed.message === "string") {
-          message = parsed.message;
-        }
-      } catch {
-        // body isn't JSON — keep defaults
-      }
-      throw new FleetRoutineError(code, message, response.status);
-    }
+    await this.throwIfError(response, "reconcile_failed", "GET /v1/me/work returned");
 
     const snapshot = (await response.json()) as AgentWorkSnapshot;
 
@@ -380,24 +345,6 @@ export class FleetRoutineClient {
 
   // --- Read endpoints ---
 
-  /** Read the full project portfolio (list of project cards). */
-  async listProjects(): Promise<ProjectCard[]> {
-    const response = await this.fetchFn(
-      `${this.baseUrl}/v1/portfolio`,
-      { method: "GET", headers: this.authHeaders },
-    );
-    return this.parseJson<ProjectCard[]>(response);
-  }
-
-  /** Read a single project card. */
-  async getProject(projectId: string): Promise<ProjectCard> {
-    const response = await this.fetchFn(
-      `${this.baseUrl}/v1/projects/${projectId}`,
-      { method: "GET", headers: this.authHeaders },
-    );
-    return this.parseJson<ProjectCard>(response);
-  }
-
   /** Read activity events after the supplied cursor. */
   async getActivity(after?: string): Promise<{
     activity: ActivityEvent[];
@@ -408,7 +355,20 @@ export class FleetRoutineClient {
       `${this.baseUrl}/v1/activity?after=${encodeURIComponent(cursor)}`,
       { method: "GET", headers: this.authHeaders },
     );
-    return this.parseJson(response);
+
+    await this.throwIfError(response, "request_failed", "GET /v1/activity returned");
+
+    const result = (await response.json()) as {
+      activity: ActivityEvent[];
+      next_cursor: string;
+    };
+
+    // Persist cursor AFTER a successful read. Native persistence must
+    // succeed before the cursor advances (contracts/routine-v1.md).
+    // API or persistence failure leaves the prior cursor intact.
+    await this.cursorStore.write(result.next_cursor);
+
+    return result;
   }
 
   /** Read Decision requests. May return an empty array in V1. */
@@ -417,10 +377,41 @@ export class FleetRoutineClient {
       `${this.baseUrl}/v1/decisions`,
       { method: "GET", headers: this.authHeaders },
     );
-    return this.parseJson<DecisionRequest[]>(response);
+    const envelope = await this.parseJson<{ decisions: DecisionRequest[] }>(response);
+    return envelope.decisions;
   }
 
   // --- Internal ---
+
+  /**
+   * Check a response for errors. If non-2xx, decode the Fleet error body
+   * ({ error: "machine_readable_code", message: "..." }) and throw a
+   * FleetRoutineError with the machine-readable code so callers can branch.
+   * Falls back to a default code + raw body when the body isn't JSON.
+   */
+  private async throwIfError(
+    response: { status: number; text: () => Promise<string> },
+    fallbackCode: string,
+    fallbackPrefix: string,
+  ): Promise<void> {
+    if (response.status < 200 || response.status >= 300) {
+      const body = await response.text();
+      let code = fallbackCode;
+      let message = `${fallbackPrefix} ${response.status}: ${body}`;
+      try {
+        const parsed = JSON.parse(body) as { error?: string; message?: string };
+        if (typeof parsed.error === "string") {
+          code = parsed.error;
+        }
+        if (typeof parsed.message === "string") {
+          message = parsed.message;
+        }
+      } catch {
+        // body isn't JSON — keep the default code and raw body as message
+      }
+      throw new FleetRoutineError(code, message, response.status);
+    }
+  }
 
   private async mutate<T>(
     path: string,
@@ -451,25 +442,7 @@ export class FleetRoutineClient {
     json: () => Promise<unknown>;
     text: () => Promise<string>;
   }): Promise<T> {
-    if (response.status < 200 || response.status >= 300) {
-      const body = await response.text();
-      // Fleet API errors have shape { error: "machine_readable_code", message: "..." }
-      // Surface the machine-readable code so callers can branch on it.
-      let code = "request_failed";
-      let message = `Request returned ${response.status}: ${body}`;
-      try {
-        const parsed = JSON.parse(body) as { error?: string; message?: string };
-        if (typeof parsed.error === "string") {
-          code = parsed.error;
-        }
-        if (typeof parsed.message === "string") {
-          message = parsed.message;
-        }
-      } catch {
-        // body isn't JSON — keep the default code and raw body as message
-      }
-      throw new FleetRoutineError(code, message, response.status);
-    }
+    await this.throwIfError(response, "request_failed", "Request returned");
     return (await response.json()) as T;
   }
 }
