@@ -55,7 +55,9 @@ an owner-operable export-and-restore rehearsal.
 - **Codex:** ownership, domain integration, D1 schema, Worker API, and verification.
 - **Claude:** proposed authority/transition enforcement and provenance tests.
 - **AgentSlo:** proposed thin Fleet Board.
-- **JuniorSLO:** proposed Fleet Routine client, cursor behavior, and pilot validation.
+- **JuniorSLO:** accepted and integrated Fleet Routine client, cursor behavior,
+  and host-verified gate evidence; see
+  `governance/activation/contributions/juniorslo-acceptance.md`.
 
 A proposed lane becomes an obligation only after the receiving agent accepts it.
 
