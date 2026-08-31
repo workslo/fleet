@@ -1,0 +1,16 @@
+.env*
+credentials.json
+token.json
+oauth_creds.json
+client_secret*.json
+.ssh/
+.mcp-auth/
+
+node_modules/
+dist/
+coverage/
+.wrangler/
+worker-configuration.d.ts
+*.tsbuildinfo
+.DS_Store
+

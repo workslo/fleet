@@ -1,0 +1,2 @@
+# Preserve imported agreement evidence byte-for-byte, including source whitespace.
+governance/agreements/working-agreement/** -whitespace
