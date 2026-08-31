@@ -6,7 +6,7 @@
   "description": "Fleet V1 shared project control plane",
   "scripts": {
     "types": "wrangler types",
-    "typecheck": "tsc --noEmit && tsc --project worker/test/tsconfig.json --noEmit && tsc --project tsconfig.node.json --noEmit",
+    "typecheck": "tsc --noEmit && tsc --project worker/test/tsconfig.json --noEmit && tsc --project board/tsconfig.json --noEmit && tsc --project tsconfig.node.json --noEmit",
     "test": "vitest run",
     "build": "vite build",
     "deploy:dry": "wrangler deploy --dry-run",
@@ -14,7 +14,13 @@
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "1.1.2",
+    "@testing-library/react": "16.3.3",
+    "@testing-library/user-event": "14.6.6",
     "@types/node": "26.4.0",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.5",
+    "@vitejs/plugin-react": "6.1.1",
+    "jsdom": "30.0.1",
     "typescript": "7.0.2",
     "vite": "8.2.2",
     "vitest": "4.1.11",
@@ -22,5 +28,9 @@
   },
   "engines": {
     "node": ">=24"
+  },
+  "dependencies": {
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
   }
 }
