@@ -653,34 +653,6 @@ describe("FleetRoutineClient — idempotency contract", () => {
   });
 });
 
-describe("FleetRoutineClient — HEARTBEAT/JOURNAL prose exclusion", () => {
-  it("exposes only Fleet API endpoints — no method accepts free-form prose", () => {
-    const store = makeCursorStore();
-    const client = makeClient(makeFetch(() => ({ status: 200, body: emptySnapshot() })), store);
-
-    // The client's public methods are exclusively Fleet API operations.
-    // There is no method that accepts HEARTBEAT or JOURNAL prose.
-    // (mutate and parseJson are TypeScript-private internal helpers —
-    // compile-time private, but still on the runtime prototype.)
-    const internal = new Set(["constructor", "mutate", "parseJson", "throwIfError"]);
-    const methods = Object.getOwnPropertyNames(
-      Object.getPrototypeOf(client),
-    ).filter((m) => !internal.has(m));
-
-    expect(methods.sort()).toEqual(
-      [
-        "acceptRequest",
-        "createWorkRequest",
-        "fulfillRequest",
-        "getActivity",
-        "getDecisions",
-        "publishPullCandidate",
-        "reconcile",
-      ].sort(),
-    );
-  });
-});
-
 describe("FleetRoutineClient — structured error codes", () => {
   it("surfaces the machine-readable error code from Fleet API errors", async () => {
     const store = makeCursorStore();

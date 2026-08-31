@@ -23,8 +23,8 @@ function apiRequest(path: string, options: RequestOptions = {}): Promise<Respons
   });
 }
 
-function postAs(principal: string, path: string, body: unknown, idempotencyKey = crypto.randomUUID()) {
-  return apiRequest(path, { body, idempotencyKey, principal });
+function postAs(principal: string, path: string, body: unknown, idempotencyKey = crypto.randomUUID(), testBarrier?: string) {
+  return apiRequest(path, { body, idempotencyKey, principal, ...(testBarrier === undefined ? {} : { testBarrier }) });
 }
 
 function mutateAs(principal: string, path: string, ifMatch: number, body: unknown, idempotencyKey = crypto.randomUUID(), testBarrier?: string) {
@@ -121,6 +121,30 @@ describe("Fleet work reconciliation", () => {
     const replay = await postAs("codex", `/v1/projects/${project.id}/requests`, body, idempotencyKey);
     expect(first.status).toBe(201);
     expect(await replay.json()).toEqual(await first.json());
+  });
+
+  it("returns the same stored request response to same-key concurrent callers", async () => {
+    const project = await activeProject();
+    const idempotencyKey = crypto.randomUUID();
+    const barrier = await preBatchBarrier();
+    const body = {
+      recipient_id: "claude",
+      title: "Create concurrently",
+      detail: "Both callers should receive the winning response",
+    };
+
+    const [first, second] = await Promise.all([
+      postAs("codex", `/v1/projects/${project.id}/requests`, body, idempotencyKey, barrier),
+      postAs("codex", `/v1/projects/${project.id}/requests`, body, idempotencyKey, barrier),
+    ]);
+
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(201);
+    expect(await second.json()).toEqual(await first.json());
+
+    const work = await getAs("codex", "/v1/me/work");
+    const snapshot = (await work.json()) as { outbound_requests: Array<{ title: string }> };
+    expect(snapshot.outbound_requests.filter((request) => request.title === body.title)).toHaveLength(1);
   });
 
   it("shows outbound state and rejects a non-recipient acceptance or fulfillment", async () => {
@@ -349,6 +373,30 @@ describe("Fleet work reconciliation", () => {
     const replay = await postAs("claude", "/v1/pull-candidates", body, idempotencyKey);
     expect(first.status).toBe(201);
     expect(await replay.json()).toEqual(await first.json());
+  });
+
+  it("returns the same stored Pull Candidate response to same-key concurrent callers", async () => {
+    const project = await activeProject();
+    const idempotencyKey = crypto.randomUUID();
+    const barrier = await preBatchBarrier();
+    const body = {
+      project_id: project.id,
+      title: "Publish concurrently",
+      detail: "Both callers should receive the winning response",
+    };
+
+    const [first, second] = await Promise.all([
+      postAs("claude", "/v1/pull-candidates", body, idempotencyKey, barrier),
+      postAs("claude", "/v1/pull-candidates", body, idempotencyKey, barrier),
+    ]);
+
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(201);
+    expect(await second.json()).toEqual(await first.json());
+
+    const work = await getAs("claude", "/v1/me/work");
+    const snapshot = (await work.json()) as { pull_candidates: Array<{ title: string }> };
+    expect(snapshot.pull_candidates.filter((candidate) => candidate.title === body.title)).toHaveLength(1);
   });
 
   it("derives the active project owner's standing next action", async () => {

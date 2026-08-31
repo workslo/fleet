@@ -141,6 +141,7 @@ export async function createRequest(request: Request, env: Env, caller: Actor, p
     state: "Pending", version: 1, accepted_at: null, fulfilled_at: null, created_at: now, updated_at: now,
   };
   const responseBody = JSON.stringify(requestResponse(stored));
+  await waitForTestPreBatchBarrier(env, request);
   try {
     await env.DB.batch([
       env.DB.prepare("INSERT INTO work_requests (id, project_id, requester_id, recipient_id, title, detail, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").bind(id, projectId, caller.id, input.recipient_id, input.title, input.detail, now, now),
@@ -148,7 +149,8 @@ export async function createRequest(request: Request, env: Env, caller: Actor, p
       idempotencyStatement(env, caller, request, idempotency, 201, responseBody),
     ]);
   } catch {
-    return error("internal_error", "work request was not stored", 500);
+    const replay = await priorReplay(env, caller, request, body);
+    return isResponse(replay) ? replay : error("internal_error", "work request was not stored", 500);
   }
   return storedResponse(responseBody, 201);
 }
@@ -244,6 +246,7 @@ export async function createPullCandidate(request: Request, env: Env, caller: Ac
   const id = crypto.randomUUID();
   const created_at = new Date().toISOString();
   const responseBody = JSON.stringify({ id, project_id: input.project_id, actor: { id: caller.id }, title: input.title, detail: input.detail, created_at });
+  await waitForTestPreBatchBarrier(env, request);
   try {
     await env.DB.batch([
       env.DB.prepare("INSERT INTO pull_candidates (id, project_id, actor_id, title, detail, created_at) VALUES (?, ?, ?, ?, ?, ?)").bind(id, input.project_id, caller.id, input.title, input.detail, created_at),
@@ -251,7 +254,8 @@ export async function createPullCandidate(request: Request, env: Env, caller: Ac
       idempotencyStatement(env, caller, request, idempotency, 201, responseBody),
     ]);
   } catch {
-    return error("internal_error", "pull candidate was not stored", 500);
+    const replay = await priorReplay(env, caller, request, body);
+    return isResponse(replay) ? replay : error("internal_error", "pull candidate was not stored", 500);
   }
   return storedResponse(responseBody, 201);
 }

@@ -4,6 +4,14 @@ import { acceptOwnership, authorizeProject, createProject, getProject, portfolio
 import { acceptRequest, activity, createPullCandidate, createRequest, decisions, fulfillRequest, myWork } from "./work";
 import type { Env } from "./types";
 
+function decodeRouteId(value: string): string | Response {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return error("invalid_request", "route id has invalid percent encoding", 400);
+  }
+}
+
 export default {
   async fetch(request, env): Promise<Response> {
     const url = new URL(request.url);
@@ -22,7 +30,8 @@ export default {
 
     const requestMatch = url.pathname.match(/^\/v1\/requests\/([^/]+)\/(accept|fulfill)$/);
     if (requestMatch) {
-      const requestId = decodeURIComponent(requestMatch[1] ?? "");
+      const requestId = decodeRouteId(requestMatch[1] ?? "");
+      if (isResponse(requestId)) return requestId;
       if (request.method === "POST" && requestMatch[2] === "accept") return acceptRequest(request, env, caller, requestId);
       if (request.method === "POST" && requestMatch[2] === "fulfill") return fulfillRequest(request, env, caller, requestId);
       return error("not_found", "route does not exist", 404);
@@ -32,7 +41,8 @@ export default {
     if (!match) return error("not_found", "route does not exist", 404);
     const idSegment = match[1];
     if (!idSegment) return error("not_found", "route does not exist", 404);
-    const projectId = decodeURIComponent(idSegment);
+    const projectId = decodeRouteId(idSegment);
+    if (isResponse(projectId)) return projectId;
     const action = match[2];
     if (request.method === "GET" && !action) return getProject(env, projectId);
     if (request.method === "POST" && action === "authorize") return authorizeProject(request, env, caller, projectId);

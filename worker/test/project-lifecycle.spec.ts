@@ -78,10 +78,38 @@ function authorizationBody() {
   };
 }
 
+async function failIdempotencyWrite(idempotencyKey: string) {
+  const trigger = `fail_project_idempotency_${crypto.randomUUID().replaceAll("-", "_")}`;
+  await env.DB.prepare(`
+    CREATE TRIGGER ${trigger}
+    BEFORE INSERT ON idempotency_records
+    WHEN NEW.idempotency_key = '${idempotencyKey}'
+    BEGIN
+      SELECT RAISE(ABORT, 'project idempotency fixture');
+    END;
+  `).run();
+  return () => env.DB.exec(`DROP TRIGGER ${trigger}`);
+}
+
 describe("Fleet project lifecycle", () => {
   it("fails closed when production authentication is not configured", async () => {
     const response = await apiRequest("/v1/projects/missing", { authMode: "production" });
     expect(response.status).toBe(503);
+  });
+
+  it("returns JSON errors for malformed percent-encoded route IDs", async () => {
+    const projectResponse = await getAs("shane", "/v1/projects/%");
+    expect(projectResponse.status).toBe(400);
+    expect(await projectResponse.json()).toMatchObject({ error: "invalid_request" });
+
+    const requestResponse = await apiRequest("/v1/requests/%/accept", {
+      body: {},
+      idempotencyKey: crypto.randomUUID(),
+      ifMatch: 1,
+      principal: "shane",
+    });
+    expect(requestResponse.status).toBe(400);
+    expect(await requestResponse.json()).toMatchObject({ error: "invalid_request" });
   });
 
   it("proposes, authorizes, accepts ownership, and returns the project card", async () => {
@@ -158,6 +186,29 @@ describe("Fleet project lifecycle", () => {
     expect(await second.json()).toEqual(await first.json());
   });
 
+  it("rolls back project proposal when its replay response cannot be stored", async () => {
+    const key = crypto.randomUUID();
+    const body = {
+      slug: `atomic-proposal-${crypto.randomUUID()}`,
+      title: "Atomic proposal",
+      originator_id: "shane",
+    };
+    const clearFixture = await failIdempotencyWrite(key);
+
+    const interrupted = await postAs("shane", "/v1/projects", body, key);
+    expect(interrupted.status).toBe(500);
+    await clearFixture();
+
+    const portfolio = await getAs("shane", "/v1/portfolio");
+    const snapshot = (await portfolio.json()) as { projects: Array<{ slug: string }> };
+    expect(snapshot.projects.some((project) => project.slug === body.slug)).toBe(false);
+
+    const retry = await postAs("shane", "/v1/projects", body, key);
+    const replay = await postAs("shane", "/v1/projects", body, key);
+    expect(retry.status).toBe(201);
+    expect(await replay.json()).toEqual(await retry.json());
+  });
+
   it("rejects stale versions", async () => {
     const project = await proposeProject();
     const response = await mutateAs("shane", `/v1/projects/${project.id}/authorize`, 2, authorizationBody());
@@ -196,6 +247,25 @@ describe("Fleet project lifecycle", () => {
     });
   });
 
+  it("rolls back authorization when its replay response cannot be stored", async () => {
+    const project = await proposeProject();
+    const key = crypto.randomUUID();
+    const body = authorizationBody();
+    const clearFixture = await failIdempotencyWrite(key);
+
+    const interrupted = await mutateAs("shane", `/v1/projects/${project.id}/authorize`, 1, body, key);
+    expect(interrupted.status).toBe(500);
+    await clearFixture();
+
+    const unchanged = await getAs("shane", `/v1/projects/${project.id}`);
+    expect(await unchanged.json()).toMatchObject({ state: "Proposed", version: 1 });
+
+    const retry = await mutateAs("shane", `/v1/projects/${project.id}/authorize`, 1, body, key);
+    const replay = await mutateAs("shane", `/v1/projects/${project.id}/authorize`, 1, body, key);
+    expect(retry.status).toBe(200);
+    expect(await replay.json()).toEqual(await retry.json());
+  });
+
   it("rolls back owner acceptance when its activity cannot be recorded", async () => {
     const project = await proposeProject();
     await mutateAs("shane", `/v1/projects/${project.id}/authorize`, 1, authorizationBody());
@@ -219,6 +289,25 @@ describe("Fleet project lifecycle", () => {
       version: 2,
       activity: expect.arrayContaining([expect.objectContaining({ type: "project.authorized" })]),
     });
+  });
+
+  it("rolls back owner acceptance when its replay response cannot be stored", async () => {
+    const project = await proposeProject();
+    await mutateAs("shane", `/v1/projects/${project.id}/authorize`, 1, authorizationBody());
+    const key = crypto.randomUUID();
+    const clearFixture = await failIdempotencyWrite(key);
+
+    const interrupted = await mutateAs("codex", `/v1/projects/${project.id}/owner-accept`, 2, {}, key);
+    expect(interrupted.status).toBe(500);
+    await clearFixture();
+
+    const unchanged = await getAs("codex", `/v1/projects/${project.id}`);
+    expect(await unchanged.json()).toMatchObject({ state: "Authorized", owner: null, version: 2 });
+
+    const retry = await mutateAs("codex", `/v1/projects/${project.id}/owner-accept`, 2, {}, key);
+    const replay = await mutateAs("codex", `/v1/projects/${project.id}/owner-accept`, 2, {}, key);
+    expect(retry.status).toBe(200);
+    expect(await replay.json()).toEqual(await retry.json());
   });
 
   it("creates one attributed activity event for each accepted mutation", async () => {
