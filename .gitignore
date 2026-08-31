@@ -10,7 +10,7 @@ node_modules/
 dist/
 coverage/
 .wrangler/
+.superpowers/
 worker-configuration.d.ts
 *.tsbuildinfo
 .DS_Store
-
