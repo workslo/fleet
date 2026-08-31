@@ -28,14 +28,14 @@ const project = {
   plan: { revision: 1, body: "Build the first vertical slice" },
   evidence: [{ uri: "https://github.com/workslo/fleet", summary: "Foundation repository" }],
   activity: [],
-  updated_at: "2026-08-31 00:00:00",
+  updated_at: "2026-08-31T00:00:00Z",
 };
 
 const work = {
   obligations: [{ source: "owner_next_action", project_id: "project-1", title: "Project owner next action", detail: "Build the Board" }],
   outbound_requests: [{ id: "outbound-1", project_id: "project-1", title: "Review Board", detail: "Review the read flow", state: "Pending", requester: { id: "codex" }, recipient: { id: "claude" } }],
   inbound_requests: [{ id: "inbound-1", project_id: "project-1", title: "Assess Board", detail: "Confirm the Board boundary", state: "Pending", requester: { id: "claude" }, recipient: { id: "codex" } }],
-  pull_candidates: [{ id: "pull-1", project_id: "project-1", actor: { id: "claude" }, title: "Improve copy", detail: "Clarify the request language", created_at: "2026-08-31 00:00:00" }],
+  pull_candidates: [{ id: "pull-1", project_id: "project-1", actor: { id: "claude" }, title: "Improve copy", detail: "Clarify the request language", created_at: "2026-08-31T00:00:00Z" }],
   activity: [],
   next_cursor: "0",
 };
@@ -55,7 +55,7 @@ function mockApi(overrides: Record<string, unknown> = {}) {
     const path = typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
     if (path.endsWith("/v1/portfolio")) return response(overrides.portfolio ?? { projects: [project] });
     if (path.endsWith("/v1/me/work?after=0")) return response(overrides.work ?? work);
-    if (path.endsWith("/v1/decisions")) return response(overrides.decisions ?? { decisions: [{ id: "decision-1", project_id: "project-1", question: "Approve the Fleet Board?", state: "Pending", created_at: "2026-08-31 00:00:00" }] });
+    if (path.endsWith("/v1/decisions")) return response(overrides.decisions ?? { decisions: [{ id: "decision-1", project_id: "project-1", question: "Approve the Fleet Board?", state: "Pending", created_at: "2026-08-31T00:00:00Z" }] });
     if (path.endsWith("/v1/projects/project-1")) return response(overrides.project ?? project);
     return response({ error: "not_found", message: "route does not exist" }, 404);
   }));

@@ -145,7 +145,7 @@ export async function createRequest(request: Request, env: Env, caller: Actor, p
   try {
     await env.DB.batch([
       env.DB.prepare("INSERT INTO work_requests (id, project_id, requester_id, recipient_id, title, detail, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").bind(id, projectId, caller.id, input.recipient_id, input.title, input.detail, now, now),
-      env.DB.prepare("INSERT INTO activity_events (project_id, actor_id, type, payload_json) VALUES (?, ?, 'work_request.created', ?)").bind(projectId, caller.id, JSON.stringify({ request_id: id, recipient_id: input.recipient_id })),
+      env.DB.prepare("INSERT INTO activity_events (project_id, actor_id, type, payload_json, created_at) VALUES (?, ?, 'work_request.created', ?, ?)").bind(projectId, caller.id, JSON.stringify({ request_id: id, recipient_id: input.recipient_id }), now),
       idempotencyStatement(env, caller, request, idempotency, 201, responseBody),
     ]);
   } catch {
@@ -175,7 +175,7 @@ export async function acceptRequest(request: Request, env: Env, caller: Actor, r
   let replay: D1Result<unknown> | undefined;
   try {
     const results = await env.DB.batch([
-      env.DB.prepare("INSERT INTO activity_events (project_id, actor_id, type, payload_json) SELECT project_id, ?, 'work_request.accepted', ? FROM work_requests WHERE id = ? AND recipient_id = ? AND version = ? AND state = 'Pending'").bind(caller.id, JSON.stringify({ request_id: requestId }), requestId, caller.id, version),
+      env.DB.prepare("INSERT INTO activity_events (project_id, actor_id, type, payload_json, created_at) SELECT project_id, ?, 'work_request.accepted', ?, ? FROM work_requests WHERE id = ? AND recipient_id = ? AND version = ? AND state = 'Pending'").bind(caller.id, JSON.stringify({ request_id: requestId }), now, requestId, caller.id, version),
       env.DB.prepare(
         "INSERT INTO idempotency_records (actor_id, idempotency_key, method, path, request_hash, response_status, response_body) SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM work_requests WHERE id = ? AND recipient_id = ? AND version = ? AND state = 'Pending')",
       ).bind(caller.id, idempotency.key, request.method, new URL(request.url).pathname, idempotency.hash, 200, responseBody, requestId, caller.id, version),
@@ -215,8 +215,8 @@ export async function fulfillRequest(request: Request, env: Env, caller: Actor, 
   let replay: D1Result<unknown> | undefined;
   try {
     const results = await env.DB.batch([
-      ...evidence.map((entry) => env.DB.prepare("INSERT INTO evidence_links (project_id, request_id, actor_id, uri, summary) SELECT project_id, id, ?, ?, ? FROM work_requests WHERE id = ? AND recipient_id = ? AND version = ? AND state = 'Accepted'").bind(caller.id, entry.uri, entry.summary, requestId, caller.id, version)),
-      env.DB.prepare("INSERT INTO activity_events (project_id, actor_id, type, payload_json) SELECT project_id, ?, 'work_request.fulfilled', ? FROM work_requests WHERE id = ? AND recipient_id = ? AND version = ? AND state = 'Accepted'").bind(caller.id, JSON.stringify({ request_id: requestId, evidence_count: evidence.length }), requestId, caller.id, version),
+      ...evidence.map((entry) => env.DB.prepare("INSERT INTO evidence_links (project_id, request_id, actor_id, uri, summary, created_at) SELECT project_id, id, ?, ?, ?, ? FROM work_requests WHERE id = ? AND recipient_id = ? AND version = ? AND state = 'Accepted'").bind(caller.id, entry.uri, entry.summary, now, requestId, caller.id, version)),
+      env.DB.prepare("INSERT INTO activity_events (project_id, actor_id, type, payload_json, created_at) SELECT project_id, ?, 'work_request.fulfilled', ?, ? FROM work_requests WHERE id = ? AND recipient_id = ? AND version = ? AND state = 'Accepted'").bind(caller.id, JSON.stringify({ request_id: requestId, evidence_count: evidence.length }), now, requestId, caller.id, version),
       env.DB.prepare(
         "INSERT INTO idempotency_records (actor_id, idempotency_key, method, path, request_hash, response_status, response_body) SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM work_requests WHERE id = ? AND recipient_id = ? AND version = ? AND state = 'Accepted')",
       ).bind(caller.id, idempotency.key, request.method, new URL(request.url).pathname, idempotency.hash, 200, responseBody, requestId, caller.id, version),
@@ -250,7 +250,7 @@ export async function createPullCandidate(request: Request, env: Env, caller: Ac
   try {
     await env.DB.batch([
       env.DB.prepare("INSERT INTO pull_candidates (id, project_id, actor_id, title, detail, created_at) VALUES (?, ?, ?, ?, ?, ?)").bind(id, input.project_id, caller.id, input.title, input.detail, created_at),
-      env.DB.prepare("INSERT INTO activity_events (project_id, actor_id, type, payload_json) VALUES (?, ?, 'pull_candidate.published', ?)").bind(input.project_id, caller.id, JSON.stringify({ pull_candidate_id: id })),
+      env.DB.prepare("INSERT INTO activity_events (project_id, actor_id, type, payload_json, created_at) VALUES (?, ?, 'pull_candidate.published', ?, ?)").bind(input.project_id, caller.id, JSON.stringify({ pull_candidate_id: id }), created_at),
       idempotencyStatement(env, caller, request, idempotency, 201, responseBody),
     ]);
   } catch {
