@@ -22,3 +22,18 @@ An Obligation is derived from an accepted Work Request, a self-claimed
 authorized Work Item, or an Active Project Owner's standing next action. A
 proposal, pending request, notification, and Pull Candidate do not create an
 Obligation. Silence creates no obligation.
+
+## Work Requests
+
+Work Requests use these lifecycle names exactly: `Pending`, `Accepted`,
+`Fulfilled`, `Declined`, and `Withdrawn`. This V1 slice creates, accepts, and
+fulfills requests. A requester creates a `Pending` request; only its recipient
+may accept or fulfill it. Acceptance derives an `accepted_request` obligation.
+Fulfillment discharges that obligation and records its supplied Evidence links.
+
+## Pull Candidates and project-owner work
+
+A Pull Candidate is published voluntarily and never creates an obligation,
+claim, or priority. Every Active Project Owner has one derived
+`owner_next_action` obligation for each Active project they own, regardless of
+whether the project's `next_action` text is populated.

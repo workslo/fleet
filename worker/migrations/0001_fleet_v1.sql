@@ -57,6 +57,7 @@ CREATE TABLE plan_revisions (
 CREATE TABLE evidence_links (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   project_id TEXT NOT NULL REFERENCES projects(id),
+  request_id TEXT REFERENCES work_requests(id),
   actor_id TEXT NOT NULL REFERENCES actors(id),
   uri TEXT NOT NULL,
   summary TEXT NOT NULL,
@@ -82,6 +83,38 @@ CREATE TABLE idempotency_records (
   response_body TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (actor_id, idempotency_key)
+);
+
+CREATE TABLE work_requests (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  requester_id TEXT NOT NULL REFERENCES actors(id),
+  recipient_id TEXT NOT NULL REFERENCES actors(id),
+  title TEXT NOT NULL,
+  detail TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('Pending', 'Accepted', 'Fulfilled', 'Declined', 'Withdrawn')) DEFAULT 'Pending',
+  version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
+  accepted_at TEXT,
+  fulfilled_at TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE pull_candidates (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  actor_id TEXT NOT NULL REFERENCES actors(id),
+  title TEXT NOT NULL,
+  detail TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE decision_requests (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  question TEXT NOT NULL,
+  state TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 INSERT INTO actors (id, display_name) VALUES

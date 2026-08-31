@@ -1,6 +1,7 @@
 import { resolveCaller } from "./auth";
 import { error, isResponse, json } from "./http";
 import { acceptOwnership, authorizeProject, createProject, getProject, portfolio } from "./projects";
+import { acceptRequest, activity, createPullCandidate, createRequest, decisions, fulfillRequest, myWork } from "./work";
 import type { Env } from "./types";
 
 export default {
@@ -13,9 +14,21 @@ export default {
     const caller = await resolveCaller(request, env);
     if (isResponse(caller)) return caller;
     if (request.method === "GET" && url.pathname === "/v1/portfolio") return portfolio(env);
+    if (request.method === "GET" && url.pathname === "/v1/me/work") return myWork(env, caller, url.searchParams.get("after"));
+    if (request.method === "GET" && url.pathname === "/v1/activity") return activity(env, url.searchParams.get("after"));
+    if (request.method === "GET" && url.pathname === "/v1/decisions") return decisions(env);
     if (request.method === "POST" && url.pathname === "/v1/projects") return createProject(request, env, caller);
+    if (request.method === "POST" && url.pathname === "/v1/pull-candidates") return createPullCandidate(request, env, caller);
 
-    const match = url.pathname.match(/^\/v1\/projects\/([^/]+)(?:\/(authorize|owner-accept))?$/);
+    const requestMatch = url.pathname.match(/^\/v1\/requests\/([^/]+)\/(accept|fulfill)$/);
+    if (requestMatch) {
+      const requestId = decodeURIComponent(requestMatch[1] ?? "");
+      if (request.method === "POST" && requestMatch[2] === "accept") return acceptRequest(request, env, caller, requestId);
+      if (request.method === "POST" && requestMatch[2] === "fulfill") return fulfillRequest(request, env, caller, requestId);
+      return error("not_found", "route does not exist", 404);
+    }
+
+    const match = url.pathname.match(/^\/v1\/projects\/([^/]+)(?:\/(authorize|owner-accept|requests))?$/);
     if (!match) return error("not_found", "route does not exist", 404);
     const idSegment = match[1];
     if (!idSegment) return error("not_found", "route does not exist", 404);
@@ -24,6 +37,7 @@ export default {
     if (request.method === "GET" && !action) return getProject(env, projectId);
     if (request.method === "POST" && action === "authorize") return authorizeProject(request, env, caller, projectId);
     if (request.method === "POST" && action === "owner-accept") return acceptOwnership(request, env, caller, projectId);
+    if (request.method === "POST" && action === "requests") return createRequest(request, env, caller, projectId);
     return error("not_found", "route does not exist", 404);
   },
 } satisfies ExportedHandler<Env>;

@@ -30,3 +30,18 @@ export type AuthorizationInput = {
   validation_evidence: string[];
   plan: string;
 };
+
+export type WorkRequestRow = {
+  id: string;
+  project_id: string;
+  requester_id: string;
+  recipient_id: string;
+  title: string;
+  detail: string;
+  state: string;
+  version: number;
+  accepted_at: string | null;
+  fulfilled_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
