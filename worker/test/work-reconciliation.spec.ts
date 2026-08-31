@@ -25,8 +25,8 @@ function postAs(principal: string, path: string, body: unknown, idempotencyKey =
   return apiRequest(path, { body, idempotencyKey, principal });
 }
 
-function mutateAs(principal: string, path: string, ifMatch: number, body: unknown) {
-  return apiRequest(path, { body, ifMatch, idempotencyKey: crypto.randomUUID(), principal });
+function mutateAs(principal: string, path: string, ifMatch: number, body: unknown, idempotencyKey = crypto.randomUUID()) {
+  return apiRequest(path, { body, ifMatch, idempotencyKey, principal });
 }
 
 function getAs(principal: string, path: string) {
@@ -54,6 +54,19 @@ async function activeProject() {
   return project;
 }
 
+async function failIdempotencyWrite(idempotencyKey: string) {
+  const trigger = `fail_idempotency_${crypto.randomUUID().replaceAll("-", "_")}`;
+  await env.DB.prepare(`
+    CREATE TRIGGER ${trigger}
+    BEFORE INSERT ON idempotency_records
+    WHEN NEW.idempotency_key = '${idempotencyKey}'
+    BEGIN
+      SELECT RAISE(ABORT, 'idempotency fixture');
+    END;
+  `).run();
+  return () => env.DB.exec(`DROP TRIGGER ${trigger}`);
+}
+
 describe("Fleet work reconciliation", () => {
   it("does not create an obligation until the recipient accepts", async () => {
     const project = await activeProject();
@@ -77,6 +90,28 @@ describe("Fleet work reconciliation", () => {
     expect(await acceptedWork.json()).toMatchObject({
       obligations: [{ source: "accepted_request", request_id: request.id }],
     });
+  });
+
+  it("rolls back an interrupted request create and replays the same key", async () => {
+    const project = await activeProject();
+    const idempotencyKey = crypto.randomUUID();
+    const body = {
+      recipient_id: "claude",
+      title: "Retry safely",
+      detail: "Prove an interrupted request does not duplicate",
+    };
+    const clearFixture = await failIdempotencyWrite(idempotencyKey);
+    const interrupted = await postAs("codex", `/v1/projects/${project.id}/requests`, body, idempotencyKey);
+    expect(interrupted.status).toBe(500);
+    await clearFixture();
+
+    const rolledBack = await getAs("codex", "/v1/me/work");
+    const snapshot = (await rolledBack.json()) as { outbound_requests: Array<{ project_id: string; title: string }> };
+    expect(snapshot.outbound_requests.some((entry) => entry.project_id === project.id && entry.title === body.title)).toBe(false);
+    const first = await postAs("codex", `/v1/projects/${project.id}/requests`, body, idempotencyKey);
+    const replay = await postAs("codex", `/v1/projects/${project.id}/requests`, body, idempotencyKey);
+    expect(first.status).toBe(201);
+    expect(await replay.json()).toEqual(await first.json());
   });
 
   it("shows outbound state and rejects a non-recipient acceptance or fulfillment", async () => {
@@ -103,6 +138,30 @@ describe("Fleet work reconciliation", () => {
     expect(rejectedFulfillment.status).toBe(403);
   });
 
+  it("rolls back an interrupted request acceptance and replays the same key", async () => {
+    const project = await activeProject();
+    const requested = await postAs("codex", `/v1/projects/${project.id}/requests`, {
+      recipient_id: "claude",
+      title: "Accept safely",
+      detail: "Prove an interrupted acceptance does not transition",
+    });
+    const request = (await requested.json()) as { id: string };
+    const idempotencyKey = crypto.randomUUID();
+    const clearFixture = await failIdempotencyWrite(idempotencyKey);
+    const interrupted = await mutateAs("claude", `/v1/requests/${request.id}/accept`, 1, {}, idempotencyKey);
+    expect(interrupted.status).toBe(500);
+    await clearFixture();
+
+    const pending = await getAs("claude", "/v1/me/work");
+    expect(await pending.json()).toMatchObject({
+      inbound_requests: expect.arrayContaining([expect.objectContaining({ id: request.id, state: "Pending" })]),
+    });
+    const first = await mutateAs("claude", `/v1/requests/${request.id}/accept`, 1, {}, idempotencyKey);
+    const replay = await mutateAs("claude", `/v1/requests/${request.id}/accept`, 1, {}, idempotencyKey);
+    expect(first.status).toBe(200);
+    expect(await replay.json()).toEqual(await first.json());
+  });
+
   it("discharges an accepted request and preserves its fulfillment evidence", async () => {
     const project = await activeProject();
     const requested = await postAs("codex", `/v1/projects/${project.id}/requests`, {
@@ -126,6 +185,34 @@ describe("Fleet work reconciliation", () => {
     });
   });
 
+  it("rolls back an interrupted fulfillment and replays the same key", async () => {
+    const project = await activeProject();
+    const requested = await postAs("codex", `/v1/projects/${project.id}/requests`, {
+      recipient_id: "claude",
+      title: "Fulfill safely",
+      detail: "Prove an interrupted fulfillment does not transition",
+    });
+    const request = (await requested.json()) as { id: string };
+    await mutateAs("claude", `/v1/requests/${request.id}/accept`, 1, {});
+    const idempotencyKey = crypto.randomUUID();
+    const body = { evidence: [{ uri: "https://example.test/retry", summary: "Retry-safe fulfillment" }] };
+    const clearFixture = await failIdempotencyWrite(idempotencyKey);
+    const interrupted = await mutateAs("claude", `/v1/requests/${request.id}/fulfill`, 2, body, idempotencyKey);
+    expect(interrupted.status).toBe(500);
+    await clearFixture();
+
+    const accepted = await getAs("claude", "/v1/me/work");
+    expect(await accepted.json()).toMatchObject({
+      obligations: expect.arrayContaining([expect.objectContaining({ request_id: request.id })]),
+    });
+    const first = await mutateAs("claude", `/v1/requests/${request.id}/fulfill`, 2, body, idempotencyKey);
+    const replay = await mutateAs("claude", `/v1/requests/${request.id}/fulfill`, 2, body, idempotencyKey);
+    expect(first.status).toBe(200);
+    expect(await replay.json()).toEqual(await first.json());
+    const card = await getAs("claude", `/v1/projects/${project.id}`);
+    expect(await card.json()).toMatchObject({ evidence: [{ uri: "https://example.test/retry", summary: "Retry-safe fulfillment" }] });
+  });
+
   it("publishes Pull Candidates without creating an obligation", async () => {
     const project = await activeProject();
     const candidate = await postAs("claude", "/v1/pull-candidates", {
@@ -140,6 +227,28 @@ describe("Fleet work reconciliation", () => {
       pull_candidates: expect.arrayContaining([expect.objectContaining({ title: "Improve request copy" })]),
     });
     expect(payload.obligations.some((obligation) => obligation.project_id === project.id)).toBe(false);
+  });
+
+  it("rolls back an interrupted Pull Candidate publication and replays the same key", async () => {
+    const project = await activeProject();
+    const idempotencyKey = crypto.randomUUID();
+    const body = {
+      project_id: project.id,
+      title: "Publish safely",
+      detail: "Prove an interrupted Pull Candidate does not duplicate",
+    };
+    const clearFixture = await failIdempotencyWrite(idempotencyKey);
+    const interrupted = await postAs("claude", "/v1/pull-candidates", body, idempotencyKey);
+    expect(interrupted.status).toBe(500);
+    await clearFixture();
+
+    const rolledBack = await getAs("claude", "/v1/me/work");
+    const snapshot = (await rolledBack.json()) as { pull_candidates: Array<{ project_id: string; title: string }> };
+    expect(snapshot.pull_candidates.some((entry) => entry.project_id === project.id && entry.title === body.title)).toBe(false);
+    const first = await postAs("claude", "/v1/pull-candidates", body, idempotencyKey);
+    const replay = await postAs("claude", "/v1/pull-candidates", body, idempotencyKey);
+    expect(first.status).toBe(201);
+    expect(await replay.json()).toEqual(await first.json());
   });
 
   it("derives the active project owner's standing next action", async () => {

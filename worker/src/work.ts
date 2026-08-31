@@ -59,12 +59,14 @@ async function priorReplay(env: Env, caller: Actor, request: Request, body: unkn
   return new Response(existing.response_body, { status: existing.response_status, headers: { "Content-Type": "application/json; charset=utf-8" } });
 }
 
-async function storeResponse(env: Env, caller: Actor, request: Request, idempotency: { key: string; hash: string }, response: Response): Promise<Response> {
-  const body = await response.text();
-  await env.DB.prepare(
+function idempotencyStatement(env: Env, caller: Actor, request: Request, idempotency: { key: string; hash: string }, status: number, body: string) {
+  return env.DB.prepare(
     "INSERT INTO idempotency_records (actor_id, idempotency_key, method, path, request_hash, response_status, response_body) VALUES (?, ?, ?, ?, ?, ?, ?)",
-  ).bind(caller.id, idempotency.key, request.method, new URL(request.url).pathname, idempotency.hash, response.status, body).run();
-  return new Response(body, { status: response.status, headers: response.headers });
+  ).bind(caller.id, idempotency.key, request.method, new URL(request.url).pathname, idempotency.hash, status, body);
+}
+
+function storedResponse(body: string, status = 200): Response {
+  return new Response(body, { status, headers: { "Content-Type": "application/json; charset=utf-8" } });
 }
 
 function expectedVersion(request: Request): number | Response {
@@ -114,16 +116,22 @@ export async function createRequest(request: Request, env: Env, caller: Actor, p
   const idempotency = await priorReplay(env, caller, request, body);
   if (isResponse(idempotency)) return idempotency;
   const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+  const stored: WorkRequestRow = {
+    id, project_id: projectId, requester_id: caller.id, recipient_id: input.recipient_id, title: input.title, detail: input.detail,
+    state: "Pending", version: 1, accepted_at: null, fulfilled_at: null, created_at: now, updated_at: now,
+  };
+  const responseBody = JSON.stringify(requestResponse(stored));
   try {
     await env.DB.batch([
-      env.DB.prepare("INSERT INTO work_requests (id, project_id, requester_id, recipient_id, title, detail) VALUES (?, ?, ?, ?, ?, ?)").bind(id, projectId, caller.id, input.recipient_id, input.title, input.detail),
+      env.DB.prepare("INSERT INTO work_requests (id, project_id, requester_id, recipient_id, title, detail, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").bind(id, projectId, caller.id, input.recipient_id, input.title, input.detail, now, now),
       env.DB.prepare("INSERT INTO activity_events (project_id, actor_id, type, payload_json) VALUES (?, ?, 'work_request.created', ?)").bind(projectId, caller.id, JSON.stringify({ request_id: id, recipient_id: input.recipient_id })),
+      idempotencyStatement(env, caller, request, idempotency, 201, responseBody),
     ]);
   } catch {
     return error("internal_error", "work request was not stored", 500);
   }
-  const stored = await workRequest(env, id);
-  return stored ? storeResponse(env, caller, request, idempotency, json(requestResponse(stored), 201)) : error("internal_error", "work request was not stored", 500);
+  return storedResponse(responseBody, 201);
 }
 
 export async function acceptRequest(request: Request, env: Env, caller: Actor, requestId: string): Promise<Response> {
@@ -139,19 +147,25 @@ export async function acceptRequest(request: Request, env: Env, caller: Actor, r
   if (current.recipient_id !== caller.id) return error("forbidden", "only the recipient may accept a work request", 403);
   if (current.version !== version) return error("precondition_failed", "work request version is stale", 412);
   if (current.state !== "Pending") return error("conflict", "work request is not pending", 409);
+  const now = new Date().toISOString();
+  const responseBody = JSON.stringify(requestResponse({ ...current, state: "Accepted", version: version + 1, accepted_at: now, updated_at: now }));
   let transition: D1Result<unknown> | undefined;
+  let replay: D1Result<unknown> | undefined;
   try {
     const results = await env.DB.batch([
-      env.DB.prepare("UPDATE work_requests SET state = 'Accepted', accepted_at = CURRENT_TIMESTAMP, version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND recipient_id = ? AND version = ? AND state = 'Pending'").bind(requestId, caller.id, version),
+      env.DB.prepare("UPDATE work_requests SET state = 'Accepted', accepted_at = ?, version = version + 1, updated_at = ? WHERE id = ? AND recipient_id = ? AND version = ? AND state = 'Pending'").bind(now, now, requestId, caller.id, version),
       env.DB.prepare("INSERT INTO activity_events (project_id, actor_id, type, payload_json) SELECT project_id, ?, 'work_request.accepted', ? FROM work_requests WHERE id = ? AND recipient_id = ? AND version = ? AND state = 'Accepted'").bind(caller.id, JSON.stringify({ request_id: requestId }), requestId, caller.id, version + 1),
+      env.DB.prepare(
+        "INSERT INTO idempotency_records (actor_id, idempotency_key, method, path, request_hash, response_status, response_body) SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM work_requests WHERE id = ? AND recipient_id = ? AND version = ? AND state = 'Accepted')",
+      ).bind(caller.id, idempotency.key, request.method, new URL(request.url).pathname, idempotency.hash, 200, responseBody, requestId, caller.id, version + 1),
     ]);
     transition = results[0];
+    replay = results[2];
   } catch {
     return error("internal_error", "work request acceptance was not stored", 500);
   }
-  if (transition?.meta.changes !== 1) return error("conflict", "work request cannot be accepted", 409);
-  const stored = await workRequest(env, requestId);
-  return stored ? storeResponse(env, caller, request, idempotency, json(requestResponse(stored))) : error("internal_error", "work request was not stored", 500);
+  if (transition?.meta.changes !== 1 || replay?.meta.changes !== 1) return error("conflict", "work request cannot be accepted", 409);
+  return storedResponse(responseBody);
 }
 
 export async function fulfillRequest(request: Request, env: Env, caller: Actor, requestId: string): Promise<Response> {
@@ -168,20 +182,26 @@ export async function fulfillRequest(request: Request, env: Env, caller: Actor, 
   if (current.recipient_id !== caller.id) return error("forbidden", "only the recipient may fulfill a work request", 403);
   if (current.version !== version) return error("precondition_failed", "work request version is stale", 412);
   if (current.state !== "Accepted") return error("conflict", "work request is not accepted", 409);
+  const now = new Date().toISOString();
+  const responseBody = JSON.stringify(requestResponse({ ...current, state: "Fulfilled", version: version + 1, fulfilled_at: now, updated_at: now }));
   let transition: D1Result<unknown> | undefined;
+  let replay: D1Result<unknown> | undefined;
   try {
     const results = await env.DB.batch([
-      env.DB.prepare("UPDATE work_requests SET state = 'Fulfilled', fulfilled_at = CURRENT_TIMESTAMP, version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND recipient_id = ? AND version = ? AND state = 'Accepted'").bind(requestId, caller.id, version),
+      env.DB.prepare("UPDATE work_requests SET state = 'Fulfilled', fulfilled_at = ?, version = version + 1, updated_at = ? WHERE id = ? AND recipient_id = ? AND version = ? AND state = 'Accepted'").bind(now, now, requestId, caller.id, version),
       ...evidence.map((entry) => env.DB.prepare("INSERT INTO evidence_links (project_id, request_id, actor_id, uri, summary) SELECT project_id, id, ?, ?, ? FROM work_requests WHERE id = ? AND recipient_id = ? AND version = ? AND state = 'Fulfilled'").bind(caller.id, entry.uri, entry.summary, requestId, caller.id, version + 1)),
       env.DB.prepare("INSERT INTO activity_events (project_id, actor_id, type, payload_json) SELECT project_id, ?, 'work_request.fulfilled', ? FROM work_requests WHERE id = ? AND recipient_id = ? AND version = ? AND state = 'Fulfilled'").bind(caller.id, JSON.stringify({ request_id: requestId, evidence_count: evidence.length }), requestId, caller.id, version + 1),
+      env.DB.prepare(
+        "INSERT INTO idempotency_records (actor_id, idempotency_key, method, path, request_hash, response_status, response_body) SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM work_requests WHERE id = ? AND recipient_id = ? AND version = ? AND state = 'Fulfilled')",
+      ).bind(caller.id, idempotency.key, request.method, new URL(request.url).pathname, idempotency.hash, 200, responseBody, requestId, caller.id, version + 1),
     ]);
     transition = results[0];
+    replay = results.at(-1);
   } catch {
     return error("internal_error", "work request fulfillment was not stored", 500);
   }
-  if (transition?.meta.changes !== 1) return error("conflict", "work request cannot be fulfilled", 409);
-  const stored = await workRequest(env, requestId);
-  return stored ? storeResponse(env, caller, request, idempotency, json(requestResponse(stored))) : error("internal_error", "work request was not stored", 500);
+  if (transition?.meta.changes !== 1 || replay?.meta.changes !== 1) return error("conflict", "work request cannot be fulfilled", 409);
+  return storedResponse(responseBody);
 }
 
 export async function createPullCandidate(request: Request, env: Env, caller: Actor): Promise<Response> {
@@ -193,15 +213,18 @@ export async function createPullCandidate(request: Request, env: Env, caller: Ac
   const idempotency = await priorReplay(env, caller, request, body);
   if (isResponse(idempotency)) return idempotency;
   const id = crypto.randomUUID();
+  const created_at = new Date().toISOString();
+  const responseBody = JSON.stringify({ id, project_id: input.project_id, actor: { id: caller.id }, title: input.title, detail: input.detail, created_at });
   try {
     await env.DB.batch([
-      env.DB.prepare("INSERT INTO pull_candidates (id, project_id, actor_id, title, detail) VALUES (?, ?, ?, ?, ?)").bind(id, input.project_id, caller.id, input.title, input.detail),
+      env.DB.prepare("INSERT INTO pull_candidates (id, project_id, actor_id, title, detail, created_at) VALUES (?, ?, ?, ?, ?, ?)").bind(id, input.project_id, caller.id, input.title, input.detail, created_at),
       env.DB.prepare("INSERT INTO activity_events (project_id, actor_id, type, payload_json) VALUES (?, ?, 'pull_candidate.published', ?)").bind(input.project_id, caller.id, JSON.stringify({ pull_candidate_id: id })),
+      idempotencyStatement(env, caller, request, idempotency, 201, responseBody),
     ]);
   } catch {
     return error("internal_error", "pull candidate was not stored", 500);
   }
-  return storeResponse(env, caller, request, idempotency, json({ id, project_id: input.project_id, actor: { id: caller.id }, title: input.title, detail: input.detail }, 201));
+  return storedResponse(responseBody, 201);
 }
 
 function cursor(value: string | null): { id: number; value: string } | Response {
