@@ -99,10 +99,11 @@ async function activeActor(env: Env, actorId: string): Promise<boolean> {
 
 function expectedVersion(request: Request): number | Response {
   const header = request.headers.get("If-Match");
-  const version = header === null ? Number.NaN : Number(header);
-  return Number.isInteger(version) && version > 0
+  const match = header?.match(/^"([1-9]\d*)"$/);
+  const version = match?.[1] === undefined ? Number.NaN : Number(match[1]);
+  return Number.isSafeInteger(version) && version > 0
     ? version
-    : error("invalid_request", "If-Match must be a positive project version", 400);
+    : error("invalid_request", "If-Match must be a quoted positive project version", 400);
 }
 
 async function card(env: Env, row: ProjectRow) {
@@ -189,15 +190,40 @@ export async function authorizeProject(request: Request, env: Env, caller: Actor
   if (!project) return error("not_found", "project does not exist", 404);
   if (project.version !== version) return error("precondition_failed", "project version is stale", 412);
   if (project.state !== "Proposed") return error("conflict", "project is not proposed", 409);
-  const update = await env.DB.prepare(
-    "UPDATE projects SET proposed_owner_id = ?, state = 'Authorized', version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND version = ?",
-  ).bind(input.proposed_owner_id, projectId, version).run();
-  if (update.meta.changes !== 1) return error("precondition_failed", "project version is stale", 412);
-  await env.DB.batch([
-    env.DB.prepare("INSERT INTO project_envelope_revisions (project_id, revision, actor_id, outcome, scope_json, exclusions_json, delegated_actions_json, gates_json, validation_evidence_json) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?)").bind(projectId, caller.id, input.outcome, JSON.stringify(input.scope), JSON.stringify(input.exclusions), JSON.stringify(input.delegated_actions), JSON.stringify(input.gates), JSON.stringify(input.validation_evidence)),
-    env.DB.prepare("INSERT INTO plan_revisions (project_id, revision, actor_id, body) VALUES (?, 1, ?, ?)").bind(projectId, caller.id, input.plan),
-    env.DB.prepare("INSERT INTO activity_events (project_id, actor_id, type, payload_json) VALUES (?, ?, 'project.authorized', ?)").bind(projectId, caller.id, JSON.stringify({ proposed_owner_id: input.proposed_owner_id })),
-  ]);
+  let transition: D1Result<unknown> | undefined;
+  try {
+    const results = await env.DB.batch([
+      env.DB.prepare(
+        "UPDATE projects SET proposed_owner_id = ?, state = 'Authorized', version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND version = ? AND state = 'Proposed'",
+      ).bind(input.proposed_owner_id, projectId, version),
+      env.DB.prepare(
+        `INSERT INTO project_envelope_revisions (project_id, revision, actor_id, outcome, scope_json, exclusions_json, delegated_actions_json, gates_json, validation_evidence_json)
+         SELECT ?, 1, ?, ?, ?, ?, ?, ?, ?
+           FROM projects
+          WHERE id = ? AND version = ? AND state = 'Authorized' AND proposed_owner_id = ?`,
+      ).bind(projectId, caller.id, input.outcome, JSON.stringify(input.scope), JSON.stringify(input.exclusions), JSON.stringify(input.delegated_actions), JSON.stringify(input.gates), JSON.stringify(input.validation_evidence), projectId, version + 1, input.proposed_owner_id),
+      env.DB.prepare(
+        `INSERT INTO plan_revisions (project_id, revision, actor_id, body)
+         SELECT ?, 1, ?, ?
+           FROM projects
+          WHERE id = ? AND version = ? AND state = 'Authorized' AND proposed_owner_id = ?`,
+      ).bind(projectId, caller.id, input.plan, projectId, version + 1, input.proposed_owner_id),
+      env.DB.prepare(
+        `INSERT INTO activity_events (project_id, actor_id, type, payload_json)
+         SELECT ?, ?, 'project.authorized', ?
+           FROM projects
+          WHERE id = ? AND version = ? AND state = 'Authorized' AND proposed_owner_id = ?`,
+      ).bind(projectId, caller.id, JSON.stringify({ proposed_owner_id: input.proposed_owner_id }), projectId, version + 1, input.proposed_owner_id),
+    ]);
+    transition = results[0];
+  } catch {
+    return error("internal_error", "project authorization was not stored", 500);
+  }
+  if (transition?.meta.changes !== 1) {
+    const current = await projectRow(env, projectId);
+    if (current?.version !== version) return error("precondition_failed", "project version is stale", 412);
+    return error("conflict", "project is not proposed", 409);
+  }
   const updated = await projectRow(env, projectId);
   if (!updated) return error("internal_error", "project was not stored", 500);
   return storeResponse(env, caller, request, idempotency, json(await card(env, updated)));
@@ -216,11 +242,28 @@ export async function acceptOwnership(request: Request, env: Env, caller: Actor,
   if (project.proposed_owner_id !== caller.id) return error("forbidden", "only the proposed owner may accept ownership", 403);
   if (project.version !== version) return error("precondition_failed", "project version is stale", 412);
   if (project.state !== "Authorized") return error("conflict", "project is not authorized", 409);
-  const update = await env.DB.prepare(
-    "UPDATE projects SET owner_id = ?, proposed_owner_id = NULL, state = 'Active', version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND version = ?",
-  ).bind(caller.id, projectId, version).run();
-  if (update.meta.changes !== 1) return error("precondition_failed", "project version is stale", 412);
-  await env.DB.prepare("INSERT INTO activity_events (project_id, actor_id, type, payload_json) VALUES (?, ?, 'project.owner_accepted', '{}')").bind(projectId, caller.id).run();
+  let transition: D1Result<unknown> | undefined;
+  try {
+    const results = await env.DB.batch([
+      env.DB.prepare(
+        "UPDATE projects SET owner_id = ?, proposed_owner_id = NULL, state = 'Active', version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND version = ? AND state = 'Authorized' AND proposed_owner_id = ?",
+      ).bind(caller.id, projectId, version, caller.id),
+      env.DB.prepare(
+        `INSERT INTO activity_events (project_id, actor_id, type, payload_json)
+         SELECT ?, ?, 'project.owner_accepted', '{}'
+           FROM projects
+          WHERE id = ? AND version = ? AND state = 'Active' AND owner_id = ?`,
+      ).bind(projectId, caller.id, projectId, version + 1, caller.id),
+    ]);
+    transition = results[0];
+  } catch {
+    return error("internal_error", "project owner acceptance was not stored", 500);
+  }
+  if (transition?.meta.changes !== 1) {
+    const current = await projectRow(env, projectId);
+    if (current?.version !== version) return error("precondition_failed", "project version is stale", 412);
+    return error("conflict", "project ownership cannot be accepted", 409);
+  }
   const updated = await projectRow(env, projectId);
   if (!updated) return error("internal_error", "project was not stored", 500);
   return storeResponse(env, caller, request, idempotency, json(await card(env, updated)));

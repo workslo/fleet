@@ -20,7 +20,7 @@ All errors have this shape:
 Mutation requests require an `Idempotency-Key`. Repeating a key with the same
 authenticated actor, request path, method, and payload returns the stored
 response; reuse with a different payload fails. Versioned transitions also
-require `If-Match` set to the current project version.
+require `If-Match: "<version>"` set to the current project version.
 
 ## ProjectCard
 

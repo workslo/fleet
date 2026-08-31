@@ -1,10 +1,11 @@
-import { exports } from "cloudflare:workers";
+import { env, exports } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 
 type RequestOptions = {
   authMode?: "production" | "test";
   body?: unknown;
   idempotencyKey?: string;
+  ifMatchHeader?: string;
   ifMatch?: number;
   method?: string;
   principal?: string;
@@ -21,7 +22,10 @@ function apiRequest(path: string, options: RequestOptions = {}): Promise<Respons
     headers.set("Idempotency-Key", options.idempotencyKey);
   }
   if (options.ifMatch !== undefined) {
-    headers.set("If-Match", String(options.ifMatch));
+    headers.set("If-Match", `"${options.ifMatch}"`);
+  }
+  if (options.ifMatchHeader !== undefined) {
+    headers.set("If-Match", options.ifMatchHeader);
   }
   if (options.body !== undefined) {
     headers.set("Content-Type", "application/json");
@@ -158,6 +162,63 @@ describe("Fleet project lifecycle", () => {
     const project = await proposeProject();
     const response = await mutateAs("shane", `/v1/projects/${project.id}/authorize`, 2, authorizationBody());
     expect(response.status).toBe(412);
+  });
+
+  it("requires quoted If-Match versions", async () => {
+    const project = await proposeProject();
+    const unquoted = await apiRequest(`/v1/projects/${project.id}/authorize`, {
+      body: authorizationBody(),
+      idempotencyKey: crypto.randomUUID(),
+      ifMatchHeader: "1",
+      principal: "shane",
+    });
+    expect(unquoted.status).toBe(400);
+
+    const quoted = await mutateAs("shane", `/v1/projects/${project.id}/authorize`, 1, authorizationBody());
+    expect(quoted.status).toBe(200);
+  });
+
+  it("rolls back authorization when an envelope revision cannot be recorded", async () => {
+    const project = await proposeProject();
+    await env.DB.prepare(
+      `INSERT INTO project_envelope_revisions
+        (project_id, revision, actor_id, outcome, scope_json, exclusions_json, delegated_actions_json, gates_json, validation_evidence_json)
+       VALUES (?, 1, 'shane', 'conflict fixture', '[]', '[]', '[]', '[]', '[]')`,
+    ).bind(project.id).run();
+
+    const response = await mutateAs("shane", `/v1/projects/${project.id}/authorize`, 1, authorizationBody());
+    expect(response.status).toBe(500);
+    const card = await getAs("shane", `/v1/projects/${project.id}`);
+    expect(await card.json()).toMatchObject({
+      state: "Proposed",
+      version: 1,
+      activity: [expect.objectContaining({ type: "project.proposed" })],
+    });
+  });
+
+  it("rolls back owner acceptance when its activity cannot be recorded", async () => {
+    const project = await proposeProject();
+    await mutateAs("shane", `/v1/projects/${project.id}/authorize`, 1, authorizationBody());
+    await env.DB.prepare(`
+      CREATE TRIGGER fail_owner_acceptance_event
+      BEFORE INSERT ON activity_events
+      WHEN NEW.type = 'project.owner_accepted'
+      BEGIN
+        SELECT RAISE(ABORT, 'owner acceptance activity fixture');
+      END;
+    `).run();
+
+    const response = await mutateAs("codex", `/v1/projects/${project.id}/owner-accept`, 2, {});
+    expect(response.status).toBe(500);
+    const card = await getAs("codex", `/v1/projects/${project.id}`);
+    const payload = await card.json();
+    await env.DB.exec("DROP TRIGGER fail_owner_acceptance_event");
+    expect(payload).toMatchObject({
+      state: "Authorized",
+      owner: null,
+      version: 2,
+      activity: expect.arrayContaining([expect.objectContaining({ type: "project.authorized" })]),
+    });
   });
 
   it("creates one attributed activity event for each accepted mutation", async () => {
