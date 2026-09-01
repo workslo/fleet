@@ -1,0 +1,472 @@
+/**
+ * Fleet Routine reference client — V1
+ *
+ * A dependency-free TypeScript client that answers the four Fleet Routine
+ * questions by calling GET /v1/me/work, persists the returned cursor on its
+ * native platform, and supports idempotent mutations with retry-safe
+ * Idempotency-Key reuse.
+ *
+ * See contracts/routine-v1.md and contracts/http-v1.md for the full contract.
+ *
+ * The four required questions (contracts/routine-v1.md):
+ *   1. What work is owed now?
+ *   2. What outbound requests exist, and what is the state of each?
+ *   3. What new inbound requests need attention?
+ *   4. What Pull Candidates have been published?
+ *
+ * Design rules from the contract:
+ *   - Persists ONLY the returned opaque decimal next_cursor on its native
+ *     platform. A routine must not advance the cursor until native
+ *     persistence succeeds.
+ *   - For the same logical write, retry with the same Idempotency-Key; do
+ *     not make a second request merely because the first response was lost.
+ *   - HEARTBEAT and JOURNAL prose, along with personal-work interiors, never
+ *     enter Fleet. This client exposes only Fleet API endpoints.
+ */
+
+// ---------------------------------------------------------------------------
+// Contract types — matching contracts/http-v1.md
+// ---------------------------------------------------------------------------
+
+export type WorkRequestState =
+  | "Pending"
+  | "Accepted"
+  | "Fulfilled"
+  | "Declined"
+  | "Withdrawn";
+
+export interface ActorRef {
+  id: string;
+}
+
+export interface Obligation {
+  source: "accepted_request" | "owner_next_action";
+  request_id?: string;
+  project_id: string;
+}
+
+export interface WorkRequestSummary {
+  id: string;
+  project_id: string;
+  requester: ActorRef;
+  recipient: ActorRef;
+  title: string;
+  detail: string;
+  state: WorkRequestState;
+  version: number;
+  accepted_at: string | null;
+  fulfilled_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PullCandidate {
+  id: string;
+  project_id: string;
+  actor: ActorRef;
+  title: string;
+  detail: string;
+  created_at: string;
+}
+
+export interface ActivityEvent {
+  id: number;
+  type: string;
+  actor: ActorRef;
+  project_id: string | null;
+  created_at: string;
+}
+
+export interface AgentWorkSnapshot {
+  obligations: Obligation[];
+  outbound_requests: WorkRequestSummary[];
+  inbound_requests: WorkRequestSummary[];
+  pull_candidates: PullCandidate[];
+  activity: ActivityEvent[];
+  next_cursor: string;
+}
+
+export interface DecisionRequest {
+  id: string;
+  project_id: string;
+  question: string;
+  state: string;
+  created_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// The four Fleet Routine answers
+// ---------------------------------------------------------------------------
+
+export interface FleetRoutineResult {
+  /** 1. What work is owed now? */
+  obligations: Obligation[];
+  /** 2. What outbound requests exist, and what is the state of each? */
+  outboundRequests: WorkRequestSummary[];
+  /** 3. What new inbound requests need attention? */
+  inboundRequests: WorkRequestSummary[];
+  /** 4. What Pull Candidates have been published? */
+  pullCandidates: PullCandidate[];
+  /**
+   * Activity events in the consumed cursor window.
+   *
+   * reconcile() advances the shared cursor past these events. Without
+   * exposing them here, getActivity() (which shares the same CursorStore)
+   * would never be able to retrieve them — the cursor has already moved.
+   * This is the "reconcile destroys activity" bug: events fetched but
+   * dropped, cursor advanced past them, no path to recover.
+   */
+  activity: ActivityEvent[];
+  /** The cursor to persist for the next run (already persisted by reconcile). */
+  cursor: string;
+}
+
+// ---------------------------------------------------------------------------
+// Injectable interfaces — the caller provides native-platform implementations
+// ---------------------------------------------------------------------------
+
+/**
+ * Persists the cursor on the agent's native platform.
+ *
+ * The cursor is the last observed activity_events.id, encoded as an opaque
+ * decimal string. A routine must not advance the cursor until its own native
+ * persistence succeeds.
+ */
+export interface CursorStore {
+  /** Returns the last persisted cursor, or null if no cursor has been stored. */
+  read(): Promise<string | null>;
+  /** Persists the new cursor. Must resolve only after the write is durable. */
+  write(cursor: string): Promise<void>;
+}
+
+/**
+ * Minimal fetch signature. Matches the structural shape of globalThis.fetch
+ * without depending on DOM or Worker type definitions. The caller may pass
+ * globalThis.fetch or a test mock.
+ */
+export type FetchLike = (
+  input: string,
+  init?: {
+    method?: string;
+    headers?: Record<string, string>;
+    body?: string;
+  },
+) => Promise<{
+  status: number;
+  json: () => Promise<unknown>;
+  text: () => Promise<string>;
+}>;
+
+// ---------------------------------------------------------------------------
+// Error
+// ---------------------------------------------------------------------------
+
+export class FleetRoutineError extends Error {
+  readonly code: string;
+  readonly status: number;
+
+  constructor(code: string, message: string, status: number) {
+    super(message);
+    this.name = "FleetRoutineError";
+    this.code = code;
+    this.status = status;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Client options
+// ---------------------------------------------------------------------------
+
+export interface FleetRoutineClientOptions {
+  /** Base URL of the Fleet Worker, e.g. "https://fleet.workslo.ai". */
+  baseUrl: string;
+  /** The authenticated actor's principal id, e.g. "juniorslo". */
+  principal: string;
+  /** Native-platform cursor persistence. Required. */
+  cursorStore: CursorStore;
+  /**
+   * Injectable fetch. Required — the caller provides its platform's fetch
+   * (globalThis.fetch in a Worker/Node, or a test mock) so the client stays
+   * dependency-free and platform-agnostic.
+   */
+  fetchFn: FetchLike;
+  /** Auth header name. Defaults to "X-Fleet-Principal" (test mode). */
+  authHeader?: string;
+}
+
+// ---------------------------------------------------------------------------
+// The client
+// ---------------------------------------------------------------------------
+
+export class FleetRoutineClient {
+  private readonly baseUrl: string;
+  private readonly fetchFn: FetchLike;
+  private readonly cursorStore: CursorStore;
+  private readonly authHeaders: Record<string, string>;
+
+  constructor(opts: FleetRoutineClientOptions) {
+    this.baseUrl = opts.baseUrl.replace(/\/+$/, "");
+    this.fetchFn = opts.fetchFn;
+    this.cursorStore = opts.cursorStore;
+    this.authHeaders = {
+      [opts.authHeader ?? "X-Fleet-Principal"]: opts.principal,
+    };
+  }
+
+  // --- The Fleet Routine ---
+
+  /**
+   * Run the Fleet Routine — answers the four required questions.
+   *
+   * Reads the persisted cursor, calls GET /v1/me/work?after=<cursor>,
+   * persists the new cursor, and returns the four answers.
+   *
+   * Cursor safety: the cursor is NOT advanced if the API call fails or
+   * if native persistence fails. The caller can safely retry reconcile()
+   * with the same cursor.
+   *
+   * Three outcomes (per API contract): success, failure, and unknown.
+   * A network error (fetch rejection) is the unknown case — the request
+   * may or may not have been received. The cursor is NOT advanced in any
+   * non-success case. The caller retries with the same cursor; the server's
+   * idempotent read semantics make this safe.
+   */
+  async reconcile(): Promise<FleetRoutineResult> {
+    const cursor = await this.cursorStore.read();
+    const after = cursor ?? "0";
+
+    const response = await this.fetchFn(
+      `${this.baseUrl}/v1/me/work?after=${encodeURIComponent(after)}`,
+      { method: "GET", headers: this.authHeaders },
+    );
+
+    await this.throwIfError(response, "reconcile_failed", "GET /v1/me/work returned");
+
+    const snapshot = (await response.json()) as AgentWorkSnapshot;
+
+    // Persist cursor BEFORE returning. Native persistence must succeed
+    // before the cursor advances (contracts/routine-v1.md).
+    await this.cursorStore.write(snapshot.next_cursor);
+
+    return {
+      obligations: snapshot.obligations,
+      outboundRequests: snapshot.outbound_requests,
+      inboundRequests: snapshot.inbound_requests,
+      pullCandidates: snapshot.pull_candidates,
+      activity: snapshot.activity,
+      cursor: snapshot.next_cursor,
+    };
+  }
+
+  // --- Mutations (all require Idempotency-Key; transitions require If-Match) ---
+
+  /**
+   * Accept a Work Request addressed to this agent.
+   *
+   * @param requestId   The Work Request id.
+   * @param version     The current request version (sent as If-Match).
+   * @param idempotencyKey  Reuse the same key for retries of the same logical accept.
+   */
+  async acceptRequest(
+    requestId: string,
+    version: number,
+    idempotencyKey: string,
+  ): Promise<WorkRequestSummary> {
+    return this.mutate<WorkRequestSummary>(
+      `/v1/requests/${requestId}/accept`,
+      version,
+      {},
+      idempotencyKey,
+    );
+  }
+
+  /**
+   * Fulfill a Work Request this agent has accepted.
+   *
+   * @param requestId   The Work Request id.
+   * @param version     The current request version (sent as If-Match).
+   * @param idempotencyKey  Reuse the same key for retries of the same logical fulfill.
+   * @param evidence    Optional evidence links [{ uri, summary }].
+   */
+  async fulfillRequest(
+    requestId: string,
+    version: number,
+    idempotencyKey: string,
+    evidence?: ReadonlyArray<{ uri: string; summary: string }>,
+  ): Promise<WorkRequestSummary> {
+    const body: Record<string, unknown> = {};
+    if (evidence !== undefined) {
+      body.evidence = evidence;
+    }
+    return this.mutate<WorkRequestSummary>(
+      `/v1/requests/${requestId}/fulfill`,
+      version,
+      body,
+      idempotencyKey,
+    );
+  }
+
+  /**
+   * Create a Work Request to another agent. Creates no obligation until the
+   * recipient explicitly accepts.
+   *
+   * @param projectId    The project this request belongs to.
+   * @param recipientId  The agent who will receive the request.
+   * @param title        Short title.
+   * @param detail       Full description of the ask.
+   * @param idempotencyKey  Reuse the same key for retries.
+   */
+  async createWorkRequest(
+    projectId: string,
+    recipientId: string,
+    title: string,
+    detail: string,
+    idempotencyKey: string,
+  ): Promise<WorkRequestSummary> {
+    return this.mutate<WorkRequestSummary>(
+      `/v1/projects/${projectId}/requests`,
+      undefined,
+      { recipient_id: recipientId, title, detail },
+      idempotencyKey,
+    );
+  }
+
+  /**
+   * Publish a Pull Candidate. Pull Candidates are voluntary and never create
+   * an obligation, claim, or priority.
+   *
+   * @param projectId    The project this pull relates to.
+   * @param title        Short title.
+   * @param detail       What the work is.
+   * @param idempotencyKey  Reuse the same key for retries.
+   */
+  async publishPullCandidate(
+    projectId: string,
+    title: string,
+    detail: string,
+    idempotencyKey: string,
+  ): Promise<PullCandidate> {
+    return this.mutate<PullCandidate>(
+      "/v1/pull-candidates",
+      undefined,
+      { project_id: projectId, title, detail },
+      idempotencyKey,
+    );
+  }
+
+  // --- Read endpoints ---
+
+  /**
+   * Read activity events after the supplied cursor.
+   *
+   * When called with no argument (the Routine path), reads the stored
+   * cursor and persists the returned next_cursor after a successful read.
+   * When called with an explicit `after` (a historical/ad-hoc read), the
+   * durable cursor is NOT advanced — the caller asked for a specific range
+   * and the routine's bookkeeping must not jump forward.
+   */
+  async getActivity(after?: string): Promise<{
+    activity: ActivityEvent[];
+    next_cursor: string;
+  }> {
+    const persist = after === undefined;
+    const cursor = after ?? (await this.cursorStore.read()) ?? "0";
+    const response = await this.fetchFn(
+      `${this.baseUrl}/v1/activity?after=${encodeURIComponent(cursor)}`,
+      { method: "GET", headers: this.authHeaders },
+    );
+
+    await this.throwIfError(response, "request_failed", "GET /v1/activity returned");
+
+    const result = (await response.json()) as {
+      activity: ActivityEvent[];
+      next_cursor: string;
+    };
+
+    // Persist cursor only on the Routine (no-arg) path. Native persistence
+    // must succeed before the cursor advances (contracts/routine-v1.md).
+    // Explicit/historical reads do NOT advance the durable cursor —
+    // getActivity("1000") must not make later reconcile() skip 11–1000.
+    // API or persistence failure leaves the prior cursor intact.
+    if (persist) {
+      await this.cursorStore.write(result.next_cursor);
+    }
+
+    return result;
+  }
+
+  /** Read Decision requests. May return an empty array in V1. */
+  async getDecisions(): Promise<DecisionRequest[]> {
+    const response = await this.fetchFn(
+      `${this.baseUrl}/v1/decisions`,
+      { method: "GET", headers: this.authHeaders },
+    );
+    const envelope = await this.parseJson<{ decisions: DecisionRequest[] }>(response);
+    return envelope.decisions;
+  }
+
+  // --- Internal ---
+
+  /**
+   * Check a response for errors. If non-2xx, decode the Fleet error body
+   * ({ error: "machine_readable_code", message: "..." }) and throw a
+   * FleetRoutineError with the machine-readable code so callers can branch.
+   * Falls back to a default code + raw body when the body isn't JSON.
+   */
+  private async throwIfError(
+    response: { status: number; text: () => Promise<string> },
+    fallbackCode: string,
+    fallbackPrefix: string,
+  ): Promise<void> {
+    if (response.status < 200 || response.status >= 300) {
+      const body = await response.text();
+      let code = fallbackCode;
+      let message = `${fallbackPrefix} ${response.status}: ${body}`;
+      try {
+        const parsed = JSON.parse(body) as { error?: string; message?: string };
+        if (typeof parsed.error === "string") {
+          code = parsed.error;
+        }
+        if (typeof parsed.message === "string") {
+          message = parsed.message;
+        }
+      } catch {
+        // body isn't JSON — keep the default code and raw body as message
+      }
+      throw new FleetRoutineError(code, message, response.status);
+    }
+  }
+
+  private async mutate<T>(
+    path: string,
+    version: number | undefined,
+    body: Record<string, unknown>,
+    idempotencyKey: string,
+  ): Promise<T> {
+    const headers: Record<string, string> = {
+      ...this.authHeaders,
+      "Content-Type": "application/json",
+      "Idempotency-Key": idempotencyKey,
+    };
+    if (version !== undefined) {
+      headers["If-Match"] = `"${version}"`;
+    }
+
+    const response = await this.fetchFn(`${this.baseUrl}${path}`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+    });
+
+    return this.parseJson<T>(response);
+  }
+
+  private async parseJson<T>(response: {
+    status: number;
+    json: () => Promise<unknown>;
+    text: () => Promise<string>;
+  }): Promise<T> {
+    await this.throwIfError(response, "request_failed", "Request returned");
+    return (await response.json()) as T;
+  }
+}

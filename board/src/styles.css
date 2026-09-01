@@ -1,0 +1,23 @@
+:root { color: #1f2933; background: #f7f8fa; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+* { box-sizing: border-box; }
+body { margin: 0; line-height: 1.5; }
+a { color: #135c89; }
+a:focus-visible, button:focus-visible { outline: 3px solid #e28b22; outline-offset: 3px; }
+.app-shell { max-width: 74rem; margin: 0 auto; padding: 1.5rem; }
+.site-header { border-bottom: 1px solid #cbd5df; margin-bottom: 1.5rem; }
+.eyebrow { color: #52616d; font-size: .85rem; font-weight: 700; letter-spacing: .08em; margin: 0; text-transform: uppercase; }
+.principal { margin: .25rem 0 1rem; }
+nav { display: flex; flex-wrap: wrap; gap: .5rem 1rem; padding-bottom: 1rem; }
+nav a[aria-current="page"] { color: #17212b; font-weight: 700; text-decoration-thickness: 3px; }
+main { max-width: 62rem; }
+.card-list { display: grid; gap: 1rem; list-style: none; margin: 0; padding: 0; }
+.card-list > li, .project-card, .error { background: #fff; border: 1px solid #cbd5df; border-radius: .5rem; padding: 1rem; }
+.card-list h2, .project-card h2 { font-size: 1.2rem; margin-top: 0; }
+.summary-list, .project-details { display: grid; gap: .75rem; }
+.summary-list div, .project-details div { display: grid; gap: .15rem; }
+dt { color: #52616d; font-weight: 700; }
+dd { margin: 0; }
+.error { border-color: #b42318; color: #7a271a; margin-bottom: 1rem; }
+button { background: #135c89; border: 0; border-radius: .25rem; color: #fff; cursor: pointer; font: inherit; padding: .5rem .8rem; }
+section + section { margin-top: 1.75rem; }
+@media (min-width: 42rem) { .summary-list { grid-template-columns: repeat(3, minmax(0, 1fr)); } .project-details { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

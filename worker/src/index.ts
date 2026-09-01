@@ -1,0 +1,53 @@
+import { resolveCaller } from "./auth";
+import { error, isResponse, json } from "./http";
+import { acceptOwnership, authorizeProject, createProject, getProject, portfolio } from "./projects";
+import { acceptRequest, activity, createPullCandidate, createRequest, decisions, fulfillRequest, myWork } from "./work";
+import type { Env } from "./types";
+
+function decodeRouteId(value: string): string | Response {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return error("invalid_request", "route id has invalid percent encoding", 400);
+  }
+}
+
+export default {
+  async fetch(request, env): Promise<Response> {
+    const url = new URL(request.url);
+    if (request.method === "GET" && url.pathname === "/health") {
+      return json({ service: "fleet", status: "ok" });
+    }
+
+    const caller = await resolveCaller(request, env);
+    if (isResponse(caller)) return caller;
+    if (request.method === "GET" && url.pathname === "/v1/portfolio") return portfolio(env);
+    if (request.method === "GET" && url.pathname === "/v1/me/work") return myWork(env, caller, url.searchParams.get("after"));
+    if (request.method === "GET" && url.pathname === "/v1/activity") return activity(env, url.searchParams.get("after"));
+    if (request.method === "GET" && url.pathname === "/v1/decisions") return decisions(env);
+    if (request.method === "POST" && url.pathname === "/v1/projects") return createProject(request, env, caller);
+    if (request.method === "POST" && url.pathname === "/v1/pull-candidates") return createPullCandidate(request, env, caller);
+
+    const requestMatch = url.pathname.match(/^\/v1\/requests\/([^/]+)\/(accept|fulfill)$/);
+    if (requestMatch) {
+      const requestId = decodeRouteId(requestMatch[1] ?? "");
+      if (isResponse(requestId)) return requestId;
+      if (request.method === "POST" && requestMatch[2] === "accept") return acceptRequest(request, env, caller, requestId);
+      if (request.method === "POST" && requestMatch[2] === "fulfill") return fulfillRequest(request, env, caller, requestId);
+      return error("not_found", "route does not exist", 404);
+    }
+
+    const match = url.pathname.match(/^\/v1\/projects\/([^/]+)(?:\/(authorize|owner-accept|requests))?$/);
+    if (!match) return error("not_found", "route does not exist", 404);
+    const idSegment = match[1];
+    if (!idSegment) return error("not_found", "route does not exist", 404);
+    const projectId = decodeRouteId(idSegment);
+    if (isResponse(projectId)) return projectId;
+    const action = match[2];
+    if (request.method === "GET" && !action) return getProject(env, projectId);
+    if (request.method === "POST" && action === "authorize") return authorizeProject(request, env, caller, projectId);
+    if (request.method === "POST" && action === "owner-accept") return acceptOwnership(request, env, caller, projectId);
+    if (request.method === "POST" && action === "requests") return createRequest(request, env, caller, projectId);
+    return error("not_found", "route does not exist", 404);
+  },
+} satisfies ExportedHandler<Env>;
