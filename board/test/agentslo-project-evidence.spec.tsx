@@ -123,6 +123,37 @@ describe("ProjectEvidencePanel", () => {
     expect(screen.getByRole("link", { name: "No timestamp PR" })).toBeVisible();
   });
 
+  it("renders duplicate URI/summary evidence without key collisions", () => {
+    // Codex review (FLEET-123): D1 permits duplicate URI/summary rows.
+    // Without a unique key per rendered occurrence, React reconciliation
+    // collides and may drop or misrender duplicates.
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const evidence: Evidence[] = [
+      { uri: "https://github.com/workslo/fleet/pull/50", summary: "Same PR", created_at: "2026-09-01T10:00:00Z" },
+      { uri: "https://github.com/workslo/fleet/pull/50", summary: "Same PR", created_at: "2026-09-01T12:00:00Z" },
+    ];
+    render(<ProjectEvidencePanel evidence={evidence} />);
+
+    // Both links must render — a key collision would cause React to
+    // silently deduplicate them.
+    const links = screen.getAllByRole("link", { name: "Same PR" });
+    expect(links).toHaveLength(2);
+    expect(links[0]).toHaveAttribute("href", "https://github.com/workslo/fleet/pull/50");
+    expect(links[1]).toHaveAttribute("href", "https://github.com/workslo/fleet/pull/50");
+
+    // The group count must reflect both items.
+    expect(screen.getByRole("heading", { name: "Pull Request (2)" })).toBeVisible();
+
+    // No React duplicate-key warning should fire.
+    const dupKeyWarnings = consoleWarn.mock.calls.filter(
+      ([msg]) => typeof msg === "string" && msg.includes("Encountered two children with the same key"),
+    );
+    expect(dupKeyWarnings).toHaveLength(0);
+
+    consoleWarn.mockRestore();
+  });
+
   it("classifies bare GitHub repository URLs as Repository type", () => {
     const evidence: Evidence[] = [
       { uri: "https://github.com/workslo/fleet", summary: "Foundation repository" },
