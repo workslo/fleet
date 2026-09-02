@@ -1,4 +1,5 @@
 import type { ActorRef, ProjectCard } from "../api";
+import { ProjectEvidencePanel } from "../components/ProjectEvidencePanel";
 
 function displayActor(actor: ActorRef | null): string {
   if (!actor) return "Unassigned";
@@ -41,12 +42,7 @@ export function ProjectView({ project, onBack }: { project: ProjectCard; onBack:
         ) : <p>No authorized envelope has been recorded.</p>}
       </section>
 
-      <section aria-labelledby="evidence-heading">
-        <h2 id="evidence-heading">Evidence</h2>
-        {project.evidence.length === 0 ? <p>No evidence links have been recorded.</p> : (
-          <ul>{project.evidence.map((evidence) => <li key={`${evidence.uri}-${evidence.summary}`}><a href={evidence.uri}>{evidence.summary}</a></li>)}</ul>
-        )}
-      </section>
+      <ProjectEvidencePanel evidence={project.evidence} />
     </article>
   );
 }
