@@ -6,11 +6,11 @@
   "description": "Fleet V1 shared project control plane",
   "scripts": {
     "types": "wrangler types",
-    "typecheck": "tsc --noEmit && tsc --project worker/test/tsconfig.json --noEmit && tsc --project board/tsconfig.json --noEmit && tsc --project routines/tsconfig.json --noEmit && tsc --project tsconfig.node.json --noEmit",
+    "typecheck": "npm run types && tsc --noEmit && tsc --project worker/test/tsconfig.json --noEmit && tsc --project board/tsconfig.json --noEmit && tsc --project routines/tsconfig.json --noEmit && tsc --project tsconfig.node.json --noEmit",
     "test": "vitest run --config vitest.routines.config.ts && vitest run",
     "build": "vite build",
     "deploy:dry": "wrangler deploy --dry-run",
-    "check": "npm run types && npm run typecheck && npm test && npm run build && npm run deploy:dry"
+    "check": "npm run typecheck && npm test && npm run build && npm run deploy:dry"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "1.1.2",
