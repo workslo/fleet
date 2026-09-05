@@ -123,8 +123,8 @@ export function ProjectEvidencePanel({ evidence }: { evidence: Evidence[] }) {
           <div key={kind} className="evidence-group">
             <h3>{KIND_LABELS[kind]} ({items.length})</h3>
             <ul>
-              {items.map((item) => (
-                <li key={`${item.uri}-${item.summary}`}>
+              {items.map((item, index) => (
+                <li key={`${item.uri}-${item.summary}-${index}`}>
                   <span className="evidence-badge" data-evidence-kind={item.kind}>{item.badge}</span>{" "}
                   <a href={item.uri}>{item.summary}</a>
                   {item.created_at ? (

@@ -123,6 +123,58 @@ describe("ProjectEvidencePanel", () => {
     expect(screen.getByRole("link", { name: "No timestamp PR" })).toBeVisible();
   });
 
+  it("renders duplicate URI/summary evidence without key collisions", () => {
+    // Codex review (FLEET-123): D1 permits duplicate URI/summary rows.
+    // React reports duplicate-key diagnostics through console.error (not
+    // console.warn), and initial render still shows both items — the
+    // damage lands on update, where reconciliation cannot tell the
+    // colliding fibers apart. So the test asserts both surfaces: no
+    // duplicate-key diagnostic, and a DOM that tracks the data across
+    // rerenders. Restoration is guaranteed by finally, not by reaching
+    // the end of the test body.
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const dupKeyErrors = () =>
+      consoleError.mock.calls.filter(
+        (args) => typeof args[0] === "string" && args[0].toLowerCase().includes("same key"),
+      );
+
+    try {
+      const both: Evidence[] = [
+        { uri: "https://github.com/workslo/fleet/pull/50", summary: "Same PR", created_at: "2026-09-01T10:00:00Z" },
+        { uri: "https://github.com/workslo/fleet/pull/50", summary: "Same PR", created_at: "2026-09-01T12:00:00Z" },
+      ];
+      const { rerender } = render(<ProjectEvidencePanel evidence={both} />);
+
+      // Both links must render, and the group count must reflect both items.
+      let links = screen.getAllByRole("link", { name: "Same PR" });
+      expect(links).toHaveLength(2);
+      expect(links[0]).toHaveAttribute("href", "https://github.com/workslo/fleet/pull/50");
+      expect(links[1]).toHaveAttribute("href", "https://github.com/workslo/fleet/pull/50");
+      expect(screen.getByRole("heading", { name: "Pull Request (2)" })).toBeVisible();
+
+      // No React duplicate-key diagnostic should fire on mount.
+      expect(dupKeyErrors()).toHaveLength(0);
+
+      // Update: drop to one item. With colliding keys React cannot tell
+      // which fiber to remove — the DOM must track the new data exactly.
+      rerender(<ProjectEvidencePanel evidence={[both[0]]} />);
+      links = screen.getAllByRole("link", { name: "Same PR" });
+      expect(links).toHaveLength(1);
+      expect(screen.getByRole("heading", { name: "Pull Request (1)" })).toBeVisible();
+      expect(dupKeyErrors()).toHaveLength(0);
+
+      // Update again: back to both items. Colliding keys on re-add are
+      // the classic duplication path — assert exactly two links again.
+      rerender(<ProjectEvidencePanel evidence={both} />);
+      links = screen.getAllByRole("link", { name: "Same PR" });
+      expect(links).toHaveLength(2);
+      expect(screen.getByRole("heading", { name: "Pull Request (2)" })).toBeVisible();
+      expect(dupKeyErrors()).toHaveLength(0);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
   it("classifies bare GitHub repository URLs as Repository type", () => {
     const evidence: Evidence[] = [
       { uri: "https://github.com/workslo/fleet", summary: "Foundation repository" },
