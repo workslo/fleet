@@ -78,6 +78,12 @@ array in this first read-only slice.
   "envelope": { "revision": 1 },
   "plan": { "revision": 1, "body": "Build the first vertical slice" },
   "evidence": [],
+  "activity": [],
   "updated_at": "2026-08-31 00:00:00"
 }
 ```
+
+Both `evidence` and `activity` on the card are capped at the 20 newest
+records, newest first. Full activity history pages through
+`GET /v1/activity?after=<cursor>`. Evidence links currently have no paging
+endpoint; the card's 20-record window is their only read surface.

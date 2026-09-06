@@ -322,4 +322,27 @@ describe("Fleet project lifecycle", () => {
       expect.objectContaining({ actor: { id: "shane" }, type: "project.proposed" }),
     ]);
   });
+
+  it("caps the card embed at the 20 newest evidence links and activity events", async () => {
+    const project = await proposeProject();
+    const inserts = Array.from({ length: 25 }, (_, i) => [
+      env.DB.prepare("INSERT INTO activity_events (project_id, actor_id, type, payload_json) VALUES (?, 'shane', ?, '{}')").bind(project.id, `test.event_${i}`),
+      env.DB.prepare("INSERT INTO evidence_links (project_id, actor_id, uri, summary) VALUES (?, 'shane', ?, ?)").bind(project.id, `https://fleet.test/evidence-${i}`, `evidence ${i}`),
+    ]).flat();
+    await env.DB.batch(inserts);
+
+    const response = await getAs("shane", `/v1/projects/${project.id}`);
+    expect(response.status).toBe(200);
+    const payload = (await response.json()) as {
+      activity: Array<{ type: string }>;
+      evidence: Array<{ uri: string }>;
+    };
+    expect(payload.activity).toHaveLength(20);
+    expect(payload.evidence).toHaveLength(20);
+    // Newest first: the last-inserted rows survive, the earliest are paged out.
+    expect(payload.activity[0]?.type).toBe("test.event_24");
+    expect(payload.evidence[0]?.uri).toBe("https://fleet.test/evidence-24");
+    expect(payload.activity.map((event) => event.type)).not.toContain("test.event_0");
+    expect(payload.evidence.map((link) => link.uri)).not.toContain("https://fleet.test/evidence-0");
+  });
 });
