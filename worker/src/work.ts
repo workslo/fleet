@@ -106,25 +106,6 @@ async function workRequest(env: Env, requestId: string): Promise<WorkRequestRow 
   return env.DB.prepare("SELECT * FROM work_requests WHERE id = ?").bind(requestId).first<WorkRequestRow>();
 }
 
-async function waitForTestPreBatchBarrier(env: Env, request: Request): Promise<void> {
-  const name = env.TEST_PRE_BATCH_BARRIER && request.headers.get("X-Fleet-Test-Pre-Batch-Barrier");
-  if (!name) return;
-  await env.DB.prepare(
-    "INSERT INTO test_pre_batch_barriers (name, arrivals) VALUES (?, 1) ON CONFLICT(name) DO UPDATE SET arrivals = arrivals + 1",
-  ).bind(name).run();
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    const barrier = await env.DB.prepare("SELECT arrivals, released FROM test_pre_batch_barriers WHERE name = ?").bind(name).first<{ arrivals: number; released: number }>();
-    const arrivals = barrier?.arrivals ?? 0;
-    const released = barrier?.released ?? 0;
-    if (arrivals >= 2) {
-      await env.DB.prepare("UPDATE test_pre_batch_barriers SET released = 1 WHERE name = ?").bind(name).run();
-    }
-    if (released === 1 || arrivals >= 2) return;
-    await new Promise<void>((resolve) => setTimeout(resolve, 1));
-  }
-  throw new Error("test pre-batch barrier timed out");
-}
-
 export async function createRequest(request: Request, env: Env, caller: Actor, projectId: string): Promise<Response> {
   const body = await requestJson(request);
   if (isResponse(body)) return body;
@@ -141,7 +122,6 @@ export async function createRequest(request: Request, env: Env, caller: Actor, p
     state: "Pending", version: 1, accepted_at: null, fulfilled_at: null, created_at: now, updated_at: now,
   };
   const responseBody = JSON.stringify(requestResponse(stored));
-  await waitForTestPreBatchBarrier(env, request);
   try {
     await env.DB.batch([
       env.DB.prepare("INSERT INTO work_requests (id, project_id, requester_id, recipient_id, title, detail, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").bind(id, projectId, caller.id, input.recipient_id, input.title, input.detail, now, now),
@@ -168,7 +148,6 @@ export async function acceptRequest(request: Request, env: Env, caller: Actor, r
   if (current.recipient_id !== caller.id) return error("forbidden", "only the recipient may accept a work request", 403);
   if (current.version !== version) return error("precondition_failed", "work request version is stale", 412);
   if (current.state !== "Pending") return error("conflict", "work request is not pending", 409);
-  await waitForTestPreBatchBarrier(env, request);
   const now = new Date().toISOString();
   const responseBody = JSON.stringify(requestResponse({ ...current, state: "Accepted", version: version + 1, accepted_at: now, updated_at: now }));
   let transition: D1Result<unknown> | undefined;
@@ -208,7 +187,6 @@ export async function fulfillRequest(request: Request, env: Env, caller: Actor, 
   if (current.recipient_id !== caller.id) return error("forbidden", "only the recipient may fulfill a work request", 403);
   if (current.version !== version) return error("precondition_failed", "work request version is stale", 412);
   if (current.state !== "Accepted") return error("conflict", "work request is not accepted", 409);
-  await waitForTestPreBatchBarrier(env, request);
   const now = new Date().toISOString();
   const responseBody = JSON.stringify(requestResponse({ ...current, state: "Fulfilled", version: version + 1, fulfilled_at: now, updated_at: now }));
   let transition: D1Result<unknown> | undefined;
@@ -246,7 +224,6 @@ export async function createPullCandidate(request: Request, env: Env, caller: Ac
   const id = crypto.randomUUID();
   const created_at = new Date().toISOString();
   const responseBody = JSON.stringify({ id, project_id: input.project_id, actor: { id: caller.id }, title: input.title, detail: input.detail, created_at });
-  await waitForTestPreBatchBarrier(env, request);
   try {
     await env.DB.batch([
       env.DB.prepare("INSERT INTO pull_candidates (id, project_id, actor_id, title, detail, created_at) VALUES (?, ?, ?, ?, ?, ?)").bind(id, input.project_id, caller.id, input.title, input.detail, created_at),

@@ -6,16 +6,16 @@ type RequestOptions = {
   idempotencyKey?: string;
   ifMatch?: number;
   principal?: string;
-  testBarrier?: string;
+  gate?: string;
 };
 
-function apiRequest(path: string, options: RequestOptions = {}): Promise<Response> {
+async function apiRequest(path: string, options: RequestOptions = {}): Promise<Response> {
   const headers = new Headers({ "X-Fleet-Auth-Mode": "test" });
   if (options.principal) headers.set("X-Fleet-Principal", options.principal);
   if (options.idempotencyKey) headers.set("Idempotency-Key", options.idempotencyKey);
   if (options.ifMatch !== undefined) headers.set("If-Match", `"${options.ifMatch}"`);
-  if (options.testBarrier) headers.set("X-Fleet-Test-Pre-Batch-Barrier", options.testBarrier);
   if (options.body !== undefined) headers.set("Content-Type", "application/json");
+  if (options.gate) await holdAtGate(options.gate);
   return exports.default.fetch(`https://fleet.test${path}`, {
     method: options.body === undefined ? "GET" : "POST",
     headers,
@@ -23,12 +23,12 @@ function apiRequest(path: string, options: RequestOptions = {}): Promise<Respons
   });
 }
 
-function postAs(principal: string, path: string, body: unknown, idempotencyKey = crypto.randomUUID(), testBarrier?: string) {
-  return apiRequest(path, { body, idempotencyKey, principal, ...(testBarrier === undefined ? {} : { testBarrier }) });
+function postAs(principal: string, path: string, body: unknown, idempotencyKey = crypto.randomUUID(), gate?: string) {
+  return apiRequest(path, { body, idempotencyKey, principal, ...(gate === undefined ? {} : { gate }) });
 }
 
-function mutateAs(principal: string, path: string, ifMatch: number, body: unknown, idempotencyKey = crypto.randomUUID(), testBarrier?: string) {
-  return apiRequest(path, { body, ifMatch, idempotencyKey, principal, ...(testBarrier === undefined ? {} : { testBarrier }) });
+function mutateAs(principal: string, path: string, ifMatch: number, body: unknown, idempotencyKey = crypto.randomUUID(), gate?: string) {
+  return apiRequest(path, { body, ifMatch, idempotencyKey, principal, ...(gate === undefined ? {} : { gate }) });
 }
 
 function getAs(principal: string, path: string) {
@@ -69,10 +69,27 @@ async function failIdempotencyWrite(idempotencyKey: string) {
   return () => env.DB.exec(`DROP TRIGGER ${trigger}`);
 }
 
-async function preBatchBarrier() {
-  await env.DB.prepare(
-    "CREATE TABLE IF NOT EXISTS test_pre_batch_barriers (name TEXT PRIMARY KEY, arrivals INTEGER NOT NULL DEFAULT 0, released INTEGER NOT NULL DEFAULT 0)",
-  ).run();
+// Concurrency gate: the race tests need two requests to hit the worker at the
+// same moment so the critical section is genuinely contended. Each caller
+// parks at the worker boundary until the expected party count arrives, then
+// all parties are released into the handler on the same tick. This seam lives
+// entirely in the test layer — the worker itself carries no test scaffolding.
+const GATE_PARTIES = 2;
+const gateWaiters = new Map<string, Array<() => void>>();
+
+async function holdAtGate(name: string): Promise<void> {
+  const waiters = gateWaiters.get(name) ?? [];
+  gateWaiters.set(name, waiters);
+  await new Promise<void>((resolve) => {
+    waiters.push(resolve);
+    if (waiters.length >= GATE_PARTIES) {
+      gateWaiters.delete(name);
+      for (const release of waiters) release();
+    }
+  });
+}
+
+function concurrencyGate(): string {
   return crypto.randomUUID();
 }
 
@@ -126,7 +143,7 @@ describe("Fleet work reconciliation", () => {
   it("returns the same stored request response to same-key concurrent callers", async () => {
     const project = await activeProject();
     const idempotencyKey = crypto.randomUUID();
-    const barrier = await preBatchBarrier();
+    const gate = concurrencyGate();
     const body = {
       recipient_id: "claude",
       title: "Create concurrently",
@@ -134,8 +151,8 @@ describe("Fleet work reconciliation", () => {
     };
 
     const [first, second] = await Promise.all([
-      postAs("codex", `/v1/projects/${project.id}/requests`, body, idempotencyKey, barrier),
-      postAs("codex", `/v1/projects/${project.id}/requests`, body, idempotencyKey, barrier),
+      postAs("codex", `/v1/projects/${project.id}/requests`, body, idempotencyKey, gate),
+      postAs("codex", `/v1/projects/${project.id}/requests`, body, idempotencyKey, gate),
     ]);
 
     expect(first.status).toBe(201);
@@ -227,10 +244,10 @@ describe("Fleet work reconciliation", () => {
     });
     const request = (await requested.json()) as { id: string };
     const idempotencyKey = crypto.randomUUID();
-    const barrier = await preBatchBarrier();
+    const gate = concurrencyGate();
     const results = await Promise.all([
-      mutateAs("claude", `/v1/requests/${request.id}/accept`, 1, {}, idempotencyKey, barrier),
-      mutateAs("claude", `/v1/requests/${request.id}/accept`, 1, {}, idempotencyKey, barrier),
+      mutateAs("claude", `/v1/requests/${request.id}/accept`, 1, {}, idempotencyKey, gate),
+      mutateAs("claude", `/v1/requests/${request.id}/accept`, 1, {}, idempotencyKey, gate),
     ]);
     expect(results.map((result) => result.status)).toEqual([200, 200]);
     expect(await results[0]?.json()).toEqual(await results[1]?.json());
@@ -328,10 +345,10 @@ describe("Fleet work reconciliation", () => {
     await mutateAs("claude", `/v1/requests/${request.id}/accept`, 1, {});
     const idempotencyKey = crypto.randomUUID();
     const body = { evidence: [{ uri: "https://example.test/same-key", summary: "Same-key fulfillment" }] };
-    const barrier = await preBatchBarrier();
+    const gate = concurrencyGate();
     const results = await Promise.all([
-      mutateAs("claude", `/v1/requests/${request.id}/fulfill`, 2, body, idempotencyKey, barrier),
-      mutateAs("claude", `/v1/requests/${request.id}/fulfill`, 2, body, idempotencyKey, barrier),
+      mutateAs("claude", `/v1/requests/${request.id}/fulfill`, 2, body, idempotencyKey, gate),
+      mutateAs("claude", `/v1/requests/${request.id}/fulfill`, 2, body, idempotencyKey, gate),
     ]);
     expect(results.map((result) => result.status)).toEqual([200, 200]);
     expect(await results[0]?.json()).toEqual(await results[1]?.json());
@@ -378,7 +395,7 @@ describe("Fleet work reconciliation", () => {
   it("returns the same stored Pull Candidate response to same-key concurrent callers", async () => {
     const project = await activeProject();
     const idempotencyKey = crypto.randomUUID();
-    const barrier = await preBatchBarrier();
+    const gate = concurrencyGate();
     const body = {
       project_id: project.id,
       title: "Publish concurrently",
@@ -386,8 +403,8 @@ describe("Fleet work reconciliation", () => {
     };
 
     const [first, second] = await Promise.all([
-      postAs("claude", "/v1/pull-candidates", body, idempotencyKey, barrier),
-      postAs("claude", "/v1/pull-candidates", body, idempotencyKey, barrier),
+      postAs("claude", "/v1/pull-candidates", body, idempotencyKey, gate),
+      postAs("claude", "/v1/pull-candidates", body, idempotencyKey, gate),
     ]);
 
     expect(first.status).toBe(201);
