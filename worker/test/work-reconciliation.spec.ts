@@ -259,6 +259,25 @@ describe("Fleet work reconciliation", () => {
     });
   });
 
+
+  it("rejects an explicit null evidence shape while absent evidence stays optional", async () => {
+    const project = await activeProject();
+    const requested = await postAs("codex", `/v1/projects/${project.id}/requests`, {
+      recipient_id: "claude",
+      title: "Run authority checks",
+      detail: "Verify request authority",
+    });
+    const request = (await requested.json()) as { id: string };
+    await mutateAs("claude", `/v1/requests/${request.id}/accept`, 1, {});
+
+    const nullEvidence = await mutateAs("claude", `/v1/requests/${request.id}/fulfill`, 2, { evidence: null });
+    expect(nullEvidence.status).toBe(400);
+    expect(await nullEvidence.json()).toMatchObject({ error: "invalid_request" });
+
+    const fulfilled = await mutateAs("claude", `/v1/requests/${request.id}/fulfill`, 2, {});
+    expect(fulfilled.status).toBe(200);
+  });
+
   it("rolls back an interrupted fulfillment and replays the same key", async () => {
     const project = await activeProject();
     const requested = await postAs("codex", `/v1/projects/${project.id}/requests`, {
@@ -351,6 +370,30 @@ describe("Fleet work reconciliation", () => {
       pull_candidates: expect.arrayContaining([expect.objectContaining({ title: "Improve request copy" })]),
     });
     expect(payload.obligations.some((obligation) => obligation.project_id === project.id)).toBe(false);
+  });
+
+
+  it("caps the shared Pull Candidate pool at the 20 newest in the work snapshot", async () => {
+    const project = await activeProject();
+    const rows = Array.from({ length: 25 }, (_, index) => [
+      crypto.randomUUID(),
+      project.id,
+      "claude",
+      `Candidate ${String(index).padStart(2, "0")}`,
+      "Bulk insertion fixture",
+      `2027-09-01 00:${String(index).padStart(2, "0")}:00`,
+    ]);
+    await env.DB.batch(rows.map((row) => env.DB.prepare(
+      "INSERT INTO pull_candidates (id, project_id, actor_id, title, detail, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+    ).bind(...row)));
+    const work = await getAs("claude", "/v1/me/work");
+    const payload = await work.json() as { pull_candidates: Array<{ title: string }> };
+    expect(payload.pull_candidates).toHaveLength(20);
+    expect(payload.pull_candidates[0]?.title).toBe("Candidate 24");
+    expect(payload.pull_candidates.some((candidate) => candidate.title === "Candidate 00")).toBe(false);
+    // bulk fixture rows persist in the shared test database — remove them so
+    // later tests read an unmodified pool
+    await env.DB.prepare("DELETE FROM pull_candidates WHERE detail = ?").bind("Bulk insertion fixture").run();
   });
 
   it("rolls back an interrupted Pull Candidate publication and replays the same key", async () => {
