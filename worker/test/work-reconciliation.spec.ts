@@ -80,13 +80,33 @@ const gateWaiters = new Map<string, Array<() => void>>();
 async function holdAtGate(name: string): Promise<void> {
   const waiters = gateWaiters.get(name) ?? [];
   gateWaiters.set(name, waiters);
-  await new Promise<void>((resolve) => {
+
+  let release!: () => void;
+  const wait = new Promise<void>((resolve) => {
+    release = resolve;
     waiters.push(resolve);
     if (waiters.length >= GATE_PARTIES) {
       gateWaiters.delete(name);
-      for (const release of waiters) release();
+      for (const r of waiters) r();
     }
   });
+
+  const timeoutMs = 2_000;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<void>((_, reject) => {
+    timer = setTimeout(() => {
+      const idx = waiters.indexOf(release);
+      if (idx !== -1) waiters.splice(idx, 1);
+      if (waiters.length === 0) gateWaiters.delete(name);
+      reject(new Error(`concurrency gate timed out: ${name}`));
+    }, timeoutMs);
+  });
+
+  try {
+    await Promise.race([wait, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 function concurrencyGate(): string {
