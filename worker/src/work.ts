@@ -31,8 +31,11 @@ function pullCandidateInput(value: unknown): PullCandidateInput | null {
 
 function fulfillmentEvidence(value: unknown): EvidenceInput[] | null {
   if (!object(value)) return null;
-  const evidence = value.evidence ?? [];
-  if (!Array.isArray(evidence)) return null;
+  const raw = (value as { evidence?: unknown }).evidence;
+  // evidence is optional (absent means none), but an explicit null is a
+  // malformed shape like any other and must fail validation.
+  if (raw !== undefined && !Array.isArray(raw)) return null;
+  const evidence = raw ?? [];
   return evidence.every((entry) => object(entry) && typeof entry.uri === "string" && typeof entry.summary === "string")
     ? evidence as EvidenceInput[]
     : null;
@@ -297,7 +300,7 @@ export async function myWork(env: Env, caller: Actor, afterValue: string | null)
     env.DB.prepare("SELECT id, next_action FROM projects WHERE owner_id = ? AND state = 'Active' ORDER BY updated_at DESC, id DESC").bind(caller.id).all<{ id: string; next_action: string | null }>(),
     env.DB.prepare("SELECT * FROM work_requests WHERE requester_id = ? ORDER BY created_at DESC, id DESC").bind(caller.id).all<WorkRequestRow>(),
     env.DB.prepare("SELECT * FROM work_requests WHERE recipient_id = ? ORDER BY created_at DESC, id DESC").bind(caller.id).all<WorkRequestRow>(),
-    env.DB.prepare("SELECT id, project_id, actor_id, title, detail, created_at FROM pull_candidates ORDER BY created_at DESC, id DESC").all<{ id: string; project_id: string; actor_id: string; title: string; detail: string; created_at: string }>(),
+    env.DB.prepare("SELECT id, project_id, actor_id, title, detail, created_at FROM pull_candidates ORDER BY created_at DESC, id DESC LIMIT 20").all<{ id: string; project_id: string; actor_id: string; title: string; detail: string; created_at: string }>(),
     activitySince(env, after.id, after.value),
   ]);
   return json({

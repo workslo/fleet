@@ -60,6 +60,12 @@ activity is returned.
 `project_id`, `question`, `state`, and `created_at`. It may return an empty
 array in this first read-only slice.
 
+The `pull_candidates` array is the shared pool — it is not scoped per actor
+(a Pull Candidate is voluntary and creates no obligation, claim, or priority).
+It is capped at the 20 newest candidates, ordered `created_at` descending.
+There is no paging endpoint for Pull Candidates; this window is their only
+read surface.
+
 ## ProjectCard
 
 ```json

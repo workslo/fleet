@@ -273,7 +273,7 @@ export class FleetRoutineClient {
     idempotencyKey: string,
   ): Promise<WorkRequestSummary> {
     return this.mutate<WorkRequestSummary>(
-      `/v1/requests/${requestId}/accept`,
+      `/v1/requests/${encodeURIComponent(requestId)}/accept`,
       version,
       {},
       idempotencyKey,
@@ -299,7 +299,7 @@ export class FleetRoutineClient {
       body.evidence = evidence;
     }
     return this.mutate<WorkRequestSummary>(
-      `/v1/requests/${requestId}/fulfill`,
+      `/v1/requests/${encodeURIComponent(requestId)}/fulfill`,
       version,
       body,
       idempotencyKey,
@@ -324,7 +324,7 @@ export class FleetRoutineClient {
     idempotencyKey: string,
   ): Promise<WorkRequestSummary> {
     return this.mutate<WorkRequestSummary>(
-      `/v1/projects/${projectId}/requests`,
+      `/v1/projects/${encodeURIComponent(projectId)}/requests`,
       undefined,
       { recipient_id: recipientId, title, detail },
       idempotencyKey,
