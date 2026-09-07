@@ -14,14 +14,15 @@ submitted token.
 An Access identity with a non-empty `sub` is a `human` principal whose stable
 key is `(issuer, sub)`. A service token has an empty `sub` and is a `service`
 principal whose stable key is `(issuer, common_name)`, where `common_name` is
-the Access Client ID. Those kinds are distinct. Only an explicitly enrolled,
-active principal mapped to an active existing Fleet actor is authorized.
+the Access Client ID. Those kinds are distinct: Shane accepts only human
+principals, and every agent actor accepts only service principals. Only an
+explicitly enrolled, active principal mapped to an active existing Fleet actor
+is authorized.
 Email, display name, request-body actor fields, and other untrusted headers do
-not enroll or select an actor. Multiple principals may be deliberately mapped
-to one actor. A Cloudflare Access service principal may not map to Shane's
-acceptance-authority actor. The service Client ID is an identifier and may be
-stored for enrollment and provenance; the Client Secret is a credential and
-must never enter D1 or an artifact.
+not enroll or select an actor. Multiple principals of the actor's required kind
+may be deliberately mapped to one actor. The service Client ID is an identifier
+and may be stored for enrollment and provenance; the Client Secret is a
+credential and must never enter D1 or an artifact.
 
 The production Worker has no test-authentication branch and never honors a
 caller-supplied identity header. Worker-runtime tests use controlled signing

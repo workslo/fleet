@@ -20,13 +20,16 @@ describe("production identity migration constraints", () => {
     ).bind(testAccessIssuer, subject).run()).rejects.toThrow();
   });
 
-  it("requires principal provenance on every new activity event", async () => {
+  it("accepts legacy-null provenance but rejects incomplete provenance", async () => {
     const projectId = crypto.randomUUID();
     await env.DB.prepare(
       "INSERT INTO projects (id, slug, title, originator_id, submitter_id, state) VALUES (?, ?, 'Migration proof', 'codex', 'codex', 'Proposed')",
     ).bind(projectId, `migration-${projectId}`).run();
+    await env.DB.prepare(
+      "INSERT INTO activity_events (project_id, actor_id, type, payload_json) VALUES (?, 'codex', 'migration.legacy', '{}')",
+    ).bind(projectId).run();
     await expect(env.DB.prepare(
-      "INSERT INTO activity_events (project_id, actor_id, type, payload_json) VALUES (?, 'codex', 'migration.invalid', '{}')",
+      "INSERT INTO activity_events (project_id, actor_id, principal_provider, type, payload_json) VALUES (?, 'codex', 'cloudflare_access', 'migration.invalid', '{}')",
     ).bind(projectId).run()).rejects.toThrow();
   });
 });

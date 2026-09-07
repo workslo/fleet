@@ -35,14 +35,19 @@ ALTER TABLE activity_events ADD COLUMN principal_issuer TEXT;
 ALTER TABLE activity_events ADD COLUMN principal_kind TEXT;
 ALTER TABLE activity_events ADD COLUMN principal_subject TEXT;
 
-CREATE TRIGGER activity_events_require_principal
+CREATE TRIGGER activity_events_principal_is_complete
 BEFORE INSERT ON activity_events
-WHEN NEW.principal_provider <> 'cloudflare_access' OR
-     NEW.principal_provider IS NULL OR
-     NEW.principal_issuer IS NULL OR length(NEW.principal_issuer) = 0 OR
-     NEW.principal_kind NOT IN ('human', 'service') OR
-     NEW.principal_kind IS NULL OR
-     NEW.principal_subject IS NULL OR length(NEW.principal_subject) = 0
+WHEN CASE
+  WHEN NEW.principal_provider IS NULL AND
+       NEW.principal_issuer IS NULL AND
+       NEW.principal_kind IS NULL AND
+       NEW.principal_subject IS NULL THEN 0
+  WHEN NEW.principal_provider = 'cloudflare_access' AND
+       NEW.principal_issuer IS NOT NULL AND length(NEW.principal_issuer) > 0 AND
+       NEW.principal_kind IN ('human', 'service') AND
+       NEW.principal_subject IS NOT NULL AND length(NEW.principal_subject) > 0 THEN 0
+  ELSE 1
+END = 1
 BEGIN
-  SELECT RAISE(ABORT, 'new activity requires production principal provenance');
+  SELECT RAISE(ABORT, 'activity principal provenance must be complete or legacy-null');
 END;
