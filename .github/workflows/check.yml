@@ -1,0 +1,37 @@
+# Runs the repository's complete verification gate on every pushed commit.
+#
+# Fleet seats publish branches inside this repository. A push run therefore
+# attaches evidence to the same head commit shown by its pull request without
+# duplicating work through a second pull_request trigger.
+
+name: check
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    env:
+      WRANGLER_SEND_METRICS: "false"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      # workerd is a platform-specific optional dependency required by the
+      # Worker and Board suites, so npm ci must not omit optional dependencies.
+      - run: npm ci
+
+      - run: npm run check
