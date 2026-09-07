@@ -34,15 +34,23 @@ ALTER TABLE activity_events ADD COLUMN principal_provider TEXT;
 ALTER TABLE activity_events ADD COLUMN principal_issuer TEXT;
 ALTER TABLE activity_events ADD COLUMN principal_kind TEXT;
 ALTER TABLE activity_events ADD COLUMN principal_subject TEXT;
+ALTER TABLE activity_events ADD COLUMN principal_legacy INTEGER NOT NULL DEFAULT 0 CHECK (principal_legacy IN (0, 1));
+
+-- Rows already present when production identity is introduced have no
+-- principal tuple. The explicit marker keeps them restorable without allowing
+-- later application writes to omit provenance.
+UPDATE activity_events SET principal_legacy = 1;
 
 CREATE TRIGGER activity_events_principal_is_complete
 BEFORE INSERT ON activity_events
 WHEN CASE
-  WHEN NEW.principal_provider IS NULL AND
+  WHEN NEW.principal_legacy = 1 AND
+       NEW.principal_provider IS NULL AND
        NEW.principal_issuer IS NULL AND
        NEW.principal_kind IS NULL AND
        NEW.principal_subject IS NULL THEN 0
-  WHEN NEW.principal_provider = 'cloudflare_access' AND
+  WHEN NEW.principal_legacy = 0 AND
+       NEW.principal_provider = 'cloudflare_access' AND
        NEW.principal_issuer IS NOT NULL AND length(NEW.principal_issuer) > 0 AND
        NEW.principal_kind IN ('human', 'service') AND
        NEW.principal_subject IS NOT NULL AND length(NEW.principal_subject) > 0 THEN 0
@@ -50,4 +58,16 @@ WHEN CASE
 END = 1
 BEGIN
   SELECT RAISE(ABORT, 'activity principal provenance must be complete or legacy-null');
+END;
+
+CREATE TRIGGER activity_events_append_only_update
+BEFORE UPDATE ON activity_events
+BEGIN
+  SELECT RAISE(ABORT, 'activity events are append only');
+END;
+
+CREATE TRIGGER activity_events_append_only_delete
+BEFORE DELETE ON activity_events
+BEGIN
+  SELECT RAISE(ABORT, 'activity events are append only');
 END;

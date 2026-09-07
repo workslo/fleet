@@ -16,9 +16,10 @@ Before an authorized deployment, replace the non-secret placeholders in
 - `FLEET_ACCESS_JWKS_URL`: the same origin followed by
   `/cdn-cgi/access/certs`.
 
-The Worker rejects missing values, non-HTTPS origins, a JWKS origin different
-from the issuer, or any JWKS path other than the fixed Access certificates
-path. `/v1/*` and `/health` are configured with Static Assets
+The Worker rejects missing values, non-HTTPS origins, issuer hosts outside
+Cloudflare's `.cloudflareaccess.com` domain, a JWKS origin different from the
+issuer, or any JWKS path other than the fixed Access certificates path.
+`/v1/*` and `/health` are configured with Static Assets
 `run_worker_first`, so API routes cannot be satisfied by an asset without
 reaching the Worker.
 

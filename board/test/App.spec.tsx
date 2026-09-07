@@ -125,7 +125,7 @@ describe("Fleet Board", () => {
     vi.stubGlobal("fetch", vi.fn(() => response({ error: "auth_unavailable", message: "production authentication is not configured" }, 503)));
     render(<App />);
 
-    expect(await screen.findByText("Fleet Board is unavailable until production authentication is configured.")).toBeVisible();
+    expect(await screen.findByText("Fleet Board does not have an authenticated actor.")).toBeVisible();
     expect(screen.getByText("production authentication is not configured")).toBeVisible();
   });
 

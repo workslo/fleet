@@ -77,7 +77,8 @@ function principalFromPayload(payload: JWTPayload, issuer: string): Principal | 
 
 function jwksUnavailable(caught: unknown): boolean {
   if (caught instanceof TypeError || caught instanceof SyntaxError) return true;
-  if (!caught || typeof caught !== "object" || !("code" in caught)) return false;
+  if (!caught || typeof caught !== "object") return false;
+  if (!("code" in caught)) return caught instanceof Error;
   return caught.code === "ERR_JOSE_GENERIC"
     || caught.code === "ERR_JWKS_TIMEOUT"
     || caught.code === "ERR_JWKS_INVALID";

@@ -37,11 +37,13 @@ export default defineConfig({
       workerProject("worker", ["worker/test/**/*.spec.ts"], validIssuer, [
         "worker/test/production-identity-jwks.spec.ts",
         "worker/test/production-identity-misconfig.spec.ts",
+        "worker/test/production-identity-placeholder.spec.ts",
         "worker/test/production-identity.spec.ts",
       ]),
       workerProject("worker-production-identity", ["worker/test/production-identity.spec.ts"]),
       workerProject("worker-auth-jwks", ["worker/test/production-identity-jwks.spec.ts"], "https://fleet-jwks.cloudflareaccess.com"),
       workerProject("worker-auth-misconfig", ["worker/test/production-identity-misconfig.spec.ts"], "http://fleet-test.cloudflareaccess.com"),
+      workerProject("worker-auth-placeholder", ["worker/test/production-identity-placeholder.spec.ts"], "https://replace-with-team.cloudflareaccess.com"),
       defineProject({
         test: {
           name: "board",

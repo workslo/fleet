@@ -19,3 +19,9 @@ and fulfillment also require the current quoted `If-Match` version.
 Fleet carries shared project state, requests, derived obligations, evidence,
 and decisions. HEARTBEAT and JOURNAL prose, along with personal-work interiors,
 never enter Fleet.
+
+The current `routines/reference-client.ts` is a local reference seam, not a
+production Access client. Its retired one-header test identity cannot satisfy
+the normal two-header service-token exchange. Native integration and proof are
+separately gated; follow `docs/onboarding/cloudflare-access.md` and do not add a
+bearer or OAuth identity fallback.

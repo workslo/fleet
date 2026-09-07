@@ -26,10 +26,19 @@ describe("production identity migration constraints", () => {
       "INSERT INTO projects (id, slug, title, originator_id, submitter_id, state) VALUES (?, ?, 'Migration proof', 'codex', 'codex', 'Proposed')",
     ).bind(projectId, `migration-${projectId}`).run();
     await env.DB.prepare(
-      "INSERT INTO activity_events (project_id, actor_id, type, payload_json) VALUES (?, 'codex', 'migration.legacy', '{}')",
+      "INSERT INTO activity_events (project_id, actor_id, type, payload_json, principal_legacy) VALUES (?, 'codex', 'migration.legacy', '{}', 1)",
     ).bind(projectId).run();
     await expect(env.DB.prepare(
+      "INSERT INTO activity_events (project_id, actor_id, type, payload_json) VALUES (?, 'codex', 'migration.unmarked', '{}')",
+    ).bind(projectId).run()).rejects.toThrow();
+    await expect(env.DB.prepare(
       "INSERT INTO activity_events (project_id, actor_id, principal_provider, type, payload_json) VALUES (?, 'codex', 'cloudflare_access', 'migration.invalid', '{}')",
+    ).bind(projectId).run()).rejects.toThrow();
+    await expect(env.DB.prepare(
+      "UPDATE activity_events SET principal_subject = 'changed' WHERE project_id = ? AND type = 'migration.legacy'",
+    ).bind(projectId).run()).rejects.toThrow();
+    await expect(env.DB.prepare(
+      "DELETE FROM activity_events WHERE project_id = ? AND type = 'migration.legacy'",
     ).bind(projectId).run()).rejects.toThrow();
   });
 });

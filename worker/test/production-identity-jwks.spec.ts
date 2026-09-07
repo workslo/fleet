@@ -44,11 +44,13 @@ describe("Cloudflare Access JWKS availability", () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       if (String(input) !== jwksUrl) throw new Error(`unexpected outbound request: ${String(input)}`);
       attempt += 1;
-      if (attempt === 1) return new Response("unavailable", { status: 502 });
-      if (attempt === 2) return new Response("not-json", { status: 200 });
-      if (attempt === 3) return Response.json({ keys: [publicJwk] });
+      if (attempt === 1) throw new Error("network unavailable");
+      if (attempt === 2) return new Response("unavailable", { status: 502 });
+      if (attempt === 3) return new Response("not-json", { status: 200 });
+      if (attempt === 4) return Response.json({ keys: [publicJwk] });
       throw new TypeError("JWKS unavailable");
     }));
+    expect((await identity()).status).toBe(503);
     expect((await identity()).status).toBe(503);
     expect((await identity()).status).toBe(503);
     const loaded = await identity();
