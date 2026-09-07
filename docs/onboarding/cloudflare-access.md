@@ -51,6 +51,15 @@ Never derive a mapping from email, token display name, `actor_id` in a body, or
 actor. Disabling the mapping or actor makes Fleet reject that identity even if
 an Access session has time remaining.
 
+Migration `0003_production_identity.sql` removes every legacy test mapping and
+intentionally creates no production identity data. Before an authorized
+cutover, prepare the verified, owner-approved enrollment statements and a D1
+backup. Apply the migration, insert the verified mappings through the
+owner-controlled D1 path, then run the `/v1/me` checks below. Until enrollment
+completes, the API fails closed for every participant. If enrollment cannot be
+completed, keep the production route disabled and restore the pre-migration D1
+backup; a code rollback alone does not recreate the discarded test mappings.
+
 A service-token secret rotation retains the Client ID, so it does not require a
 Fleet mapping change. Replacing the service token with a new Client ID requires
 a new explicit mapping; disable the old mapping after its owner-authorized

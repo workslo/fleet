@@ -14,21 +14,35 @@ DROP TABLE actor_principals_legacy;
 
 CREATE INDEX idx_actor_principals_actor_id ON actor_principals (actor_id);
 
-CREATE TRIGGER actor_principals_shane_requires_human
+CREATE TRIGGER actor_principals_kind_matches_actor
 BEFORE INSERT ON actor_principals
-WHEN NEW.actor_id = 'shane' AND NEW.provider = 'cloudflare_access' AND NEW.kind <> 'human'
+WHEN (NEW.actor_id = 'shane' AND NEW.kind <> 'human') OR
+     (NEW.actor_id <> 'shane' AND NEW.kind <> 'service')
 BEGIN
-  SELECT RAISE(ABORT, 'Shane production principals must be human');
+  SELECT RAISE(ABORT, 'principal kind does not match the Fleet actor');
 END;
 
-CREATE TRIGGER actor_principals_shane_requires_human_update
+CREATE TRIGGER actor_principals_kind_matches_actor_update
 BEFORE UPDATE OF actor_id, kind ON actor_principals
-WHEN NEW.actor_id = 'shane' AND NEW.provider = 'cloudflare_access' AND NEW.kind <> 'human'
+WHEN (NEW.actor_id = 'shane' AND NEW.kind <> 'human') OR
+     (NEW.actor_id <> 'shane' AND NEW.kind <> 'service')
 BEGIN
-  SELECT RAISE(ABORT, 'Shane production principals must be human');
+  SELECT RAISE(ABORT, 'principal kind does not match the Fleet actor');
 END;
 
 ALTER TABLE activity_events ADD COLUMN principal_provider TEXT;
 ALTER TABLE activity_events ADD COLUMN principal_issuer TEXT;
 ALTER TABLE activity_events ADD COLUMN principal_kind TEXT;
 ALTER TABLE activity_events ADD COLUMN principal_subject TEXT;
+
+CREATE TRIGGER activity_events_require_principal
+BEFORE INSERT ON activity_events
+WHEN NEW.principal_provider <> 'cloudflare_access' OR
+     NEW.principal_provider IS NULL OR
+     NEW.principal_issuer IS NULL OR length(NEW.principal_issuer) = 0 OR
+     NEW.principal_kind NOT IN ('human', 'service') OR
+     NEW.principal_kind IS NULL OR
+     NEW.principal_subject IS NULL OR length(NEW.principal_subject) = 0
+BEGIN
+  SELECT RAISE(ABORT, 'new activity requires production principal provenance');
+END;
