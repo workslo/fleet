@@ -82,6 +82,15 @@ Do not add an application-level bearer fallback unless a participating native
 surface first demonstrates that neither supported Access header form works.
 Such a fallback would be a separately reviewed identity system.
 
+The current `routines/reference-client.ts` is not production identity-ready.
+It models one configurable identity header and defaults to the retired
+`X-Fleet-Principal` test seam, so it cannot express Access's normal two-header
+service-token exchange and its default is rejected by this Worker. Replacing
+that interface with the proven two-header form or an owner-configured combined
+header is a separate native-integration change to coordinate with the Routine
+owner. Until that happens, do not report the reference client as native proof
+and do not add a bearer or OAuth workaround.
+
 ## Required native proof
 
 For every participating surface, record the surface and verification time for:
