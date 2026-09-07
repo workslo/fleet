@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { cloudflareTest, readD1Migrations } from "@cloudflare/vitest-plugin";
@@ -5,6 +6,9 @@ import { defineConfig, defineProject } from "vitest/config";
 
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 const validIssuer = "https://fleet-test.cloudflareaccess.com";
+const checkedInConfig = JSON.parse(readFileSync(path.join(projectRoot, "wrangler.jsonc"), "utf8")) as {
+  vars: { FLEET_ACCESS_ISSUER: string };
+};
 
 function workerProject(name: string, include: string[], issuer = validIssuer, exclude: string[] = []) {
   const jwksIssuer = issuer.replace(/^http:/, "https:");
@@ -43,7 +47,7 @@ export default defineConfig({
       workerProject("worker-production-identity", ["worker/test/production-identity.spec.ts"]),
       workerProject("worker-auth-jwks", ["worker/test/production-identity-jwks.spec.ts"], "https://fleet-jwks.cloudflareaccess.com"),
       workerProject("worker-auth-misconfig", ["worker/test/production-identity-misconfig.spec.ts"], "http://fleet-test.cloudflareaccess.com"),
-      workerProject("worker-auth-placeholder", ["worker/test/production-identity-placeholder.spec.ts"], "https://replace-with-team.cloudflareaccess.com"),
+      workerProject("worker-auth-placeholder", ["worker/test/production-identity-placeholder.spec.ts"], checkedInConfig.vars.FLEET_ACCESS_ISSUER),
       defineProject({
         test: {
           name: "board",

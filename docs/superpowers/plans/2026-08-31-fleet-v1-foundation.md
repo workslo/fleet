@@ -16,7 +16,7 @@
 - `CONTEXT.md` is a stable glossary, not an implementation-status surface.
 - D1 owns shared state and provenance; GitHub owns code and review evidence.
 - Actor identity comes only from a verified principal mapping, never an actor ID supplied as the caller.
-- Local tests use `FLEET_AUTH_MODE=test` plus `X-Fleet-Principal`; any other auth mode fails closed with HTTP 503 until production authentication is separately approved.
+- Local tests use controlled RS256 signing keys, a fixed Access-shaped issuer and JWKS, and explicitly enrolled test principals; the production Worker contains no test-authentication branch and checked-in placeholders fail closed with HTTP 503.
 - Every POST requires `Idempotency-Key`; mutation of an existing record also requires `If-Match: "<version>"`.
 - Work Requests create no obligation until the recipient explicitly accepts.
 - An Obligation is derived and must not be stored as its own table.

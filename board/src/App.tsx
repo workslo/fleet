@@ -77,7 +77,7 @@ export function App() {
         <p className="eyebrow">Fleet Board</p>
         {data.identity
           ? <p className="principal">Signed in as {data.identity.actor.display_name} ({data.identity.principal.kind} principal)</p>
-          : <p className="principal" role="note">Fleet Board does not have an authenticated actor.</p>}
+          : !loading ? <p className="principal" role="note">Fleet Board does not have an authenticated actor.</p> : null}
         <nav aria-label="Fleet Board views">
           <a href="#portfolio" aria-current={view === "portfolio" ? "page" : undefined} onClick={(event) => { event.preventDefault(); setView("portfolio"); }}>Portfolio</a>
           <a href="#my-work" aria-current={view === "my-work" ? "page" : undefined} onClick={(event) => { event.preventDefault(); setView("my-work"); }}>My Work</a>
