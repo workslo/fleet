@@ -17,6 +17,17 @@ type AccessConfig = {
   jwksUrl: URL;
 };
 
+const jwksResolvers = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
+
+function jwksResolver(url: URL): ReturnType<typeof createRemoteJWKSet> {
+  const key = url.href;
+  const existing = jwksResolvers.get(key);
+  if (existing) return existing;
+  const created = createRemoteJWKSet(url, { timeoutDuration: 3_000 });
+  jwksResolvers.set(key, created);
+  return created;
+}
+
 function accessConfig(env: Env): AccessConfig | Response {
   const issuerValue = typeof env.FLEET_ACCESS_ISSUER === "string" ? env.FLEET_ACCESS_ISSUER.trim() : "";
   const audience = typeof env.FLEET_ACCESS_AUDIENCE === "string" ? env.FLEET_ACCESS_AUDIENCE.trim() : "";
@@ -67,7 +78,9 @@ function principalFromPayload(payload: JWTPayload, issuer: string): Principal | 
 function jwksUnavailable(caught: unknown): boolean {
   if (caught instanceof TypeError || caught instanceof SyntaxError) return true;
   if (!caught || typeof caught !== "object" || !("code" in caught)) return false;
-  return caught.code === "ERR_JWKS_TIMEOUT" || caught.code === "ERR_JWKS_INVALID";
+  return caught.code === "ERR_JOSE_GENERIC"
+    || caught.code === "ERR_JWKS_TIMEOUT"
+    || caught.code === "ERR_JWKS_INVALID";
 }
 
 async function activeActor(env: Env, principal: Principal): Promise<Actor | Response> {
@@ -101,7 +114,7 @@ async function resolveAccessCaller(request: Request, env: Env): Promise<Actor | 
   if (!token) return error("unauthorized", "Cloudflare Access application token is required", 401);
 
   try {
-    const jwks = createRemoteJWKSet(config.jwksUrl, { timeoutDuration: 3_000 });
+    const jwks = jwksResolver(config.jwksUrl);
     const { payload } = await jwtVerify(token, jwks, {
       algorithms: ["RS256"],
       audience: config.audience,

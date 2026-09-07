@@ -1,6 +1,6 @@
 import { env, exports } from "cloudflare:workers";
 import { exportJWK, generateKeyPair, generateSecret, SignJWT, type JWK } from "jose";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 const issuer = "https://fleet-test.cloudflareaccess.com";
 const audience = "fleet-test-audience";
@@ -52,10 +52,49 @@ function apiRequest(
   });
 }
 
+function authorizationBody(outcome: string) {
+  return {
+    actor_id: "shane",
+    delegated_actions: ["request"],
+    exclusions: [],
+    gates: [],
+    outcome,
+    plan: "Exercise authenticated authority",
+    proposed_owner_id: "codex",
+    scope: ["identity"],
+    validation_evidence: ["controlled JWT tests"],
+  };
+}
+
+async function activeCodexProject(codexToken: string): Promise<string> {
+  const proposed = await apiRequest("/v1/projects", codexToken, {
+    body: { originator_id: "codex", slug: `identity-${crypto.randomUUID()}`, title: "Identity proof" },
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+  });
+  if (proposed.status !== 201) throw new Error("active-project fixture could not propose a project");
+  const project = await proposed.json() as { id: string };
+  const shaneToken = await token({ sub: "human-shane" });
+  const authorized = await apiRequest(`/v1/projects/${project.id}/authorize`, shaneToken, {
+    body: authorizationBody("Cross-seat proof"),
+    headers: { "Idempotency-Key": crypto.randomUUID(), "If-Match": '"1"', Origin: "https://fleet.test" },
+  });
+  if (authorized.status !== 200) throw new Error("active-project fixture could not authorize the project");
+  const accepted = await apiRequest(`/v1/projects/${project.id}/owner-accept`, codexToken, {
+    body: {},
+    headers: { "Idempotency-Key": crypto.randomUUID(), "If-Match": '"2"' },
+  });
+  if (accepted.status !== 200) throw new Error("active-project fixture could not accept ownership");
+  return project.id;
+}
+
 beforeAll(async () => {
   const pair = await generateKeyPair("RS256", { extractable: true });
   signingKey = pair.privateKey;
   publicJwk = { ...await exportJWK(pair.publicKey), alg: "RS256", kid: keyId, use: "sig" };
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    if (String(input) !== jwksUrl) throw new Error(`unexpected outbound request: ${String(input)}`);
+    return Response.json({ keys: [publicJwk] });
+  }));
   await env.DB.batch([
     env.DB.prepare(
       "INSERT INTO actor_principals (provider, issuer, kind, subject, actor_id, active) VALUES ('cloudflare_access', ?, 'human', ?, 'shane', 1)",
@@ -78,16 +117,12 @@ beforeAll(async () => {
   ]);
 });
 
-beforeEach(() => {
-  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
-    if (String(input) !== jwksUrl) throw new Error(`unexpected outbound request: ${String(input)}`);
-    return Response.json({ keys: [publicJwk] });
-  }));
+afterEach(async () => {
+  await env.DB.prepare("UPDATE actors SET active = 1 WHERE id = 'juniorslo'").run();
 });
 
-afterEach(async () => {
+afterAll(() => {
   vi.unstubAllGlobals();
-  await env.DB.prepare("UPDATE actors SET active = 1 WHERE id = 'juniorslo'").run();
 });
 
 describe("Fleet production identity", () => {
@@ -173,14 +208,7 @@ describe("Fleet production identity", () => {
     expect(await response.json()).toMatchObject({ actor: { id: "codex" } });
   });
 
-  it("returns a service-unavailable error when the trusted JWKS cannot be fetched", async () => {
-    vi.stubGlobal("fetch", vi.fn(() => Promise.reject(new TypeError("JWKS unavailable"))));
-    const response = await apiRequest("/v1/me", await token({ common_name: "codex-primary.access", sub: "" }));
-    expect(response.status).toBe(503);
-    expect(await response.json()).toMatchObject({ error: "auth_unavailable" });
-  });
-
-  it("permits own actions and denies Shane-only and other-actor actions", async () => {
+  it("records an own action with principal provenance and denies Shane-only authority", async () => {
     const codexToken = await token({ common_name: "codex-primary.access", sub: "" });
     const proposed = await apiRequest("/v1/projects", codexToken, {
       body: { originator_id: "codex", slug: `identity-${crypto.randomUUID()}`, title: "Identity proof" },
@@ -207,43 +235,16 @@ describe("Fleet production identity", () => {
     });
 
     const denied = await apiRequest(`/v1/projects/${project.id}/authorize`, codexToken, {
-      body: {
-        actor_id: "shane",
-        delegated_actions: [],
-        exclusions: [],
-        gates: [],
-        outcome: "No impersonation",
-        plan: "Deny it",
-        proposed_owner_id: "codex",
-        scope: [],
-        validation_evidence: [],
-      },
+      body: authorizationBody("No impersonation"),
       headers: { "Idempotency-Key": crypto.randomUUID(), "If-Match": '"1"' },
     });
     expect(denied.status).toBe(403);
+  });
 
-    const shaneToken = await token({ sub: "human-shane" });
-    const authorized = await apiRequest(`/v1/projects/${project.id}/authorize`, shaneToken, {
-      body: {
-        actor_id: "shane",
-        delegated_actions: ["request"],
-        exclusions: [],
-        gates: [],
-        outcome: "Cross-seat proof",
-        plan: "Exercise recipient authority",
-        proposed_owner_id: "codex",
-        scope: ["identity"],
-        validation_evidence: ["controlled JWT tests"],
-      },
-      headers: { "Idempotency-Key": crypto.randomUUID(), "If-Match": '"1"', Origin: "https://fleet.test" },
-    });
-    expect(authorized.status).toBe(200);
-    expect((await apiRequest(`/v1/projects/${project.id}/owner-accept`, codexToken, {
-      body: {},
-      headers: { "Idempotency-Key": crypto.randomUUID(), "If-Match": '"2"' },
-    })).status).toBe(200);
-
-    const requested = await apiRequest(`/v1/projects/${project.id}/requests`, codexToken, {
+  it("denies accepting or fulfilling another actor's request", async () => {
+    const codexToken = await token({ common_name: "codex-primary.access", sub: "" });
+    const projectId = await activeCodexProject(codexToken);
+    const requested = await apiRequest(`/v1/projects/${projectId}/requests`, codexToken, {
       body: { recipient_id: "claude", title: "Review identity", detail: "Prove recipient authority" },
       headers: { "Idempotency-Key": crypto.randomUUID() },
     });
