@@ -1,5 +1,15 @@
 export type ActorRef = { id: string };
 
+export type FleetIdentity = {
+  actor: { id: string; display_name: string };
+  principal: {
+    provider: "cloudflare_access" | "test";
+    issuer: string;
+    kind: "human" | "service" | "test";
+    subject: string;
+  };
+};
+
 export type Evidence = {
   uri: string;
   summary: string;
@@ -89,7 +99,9 @@ export class FleetApiError extends Error {
 }
 
 export class FleetApi {
-  constructor(private readonly testPrincipal?: string) {}
+  async identity(): Promise<FleetIdentity> {
+    return this.get("/v1/me");
+  }
 
   async portfolio(): Promise<{ projects: ProjectCard[] }> {
     return this.get("/v1/portfolio");
@@ -109,7 +121,6 @@ export class FleetApi {
 
   private async get<T>(path: string): Promise<T> {
     const headers = new Headers({ Accept: "application/json" });
-    if (this.testPrincipal) headers.set("X-Fleet-Principal", this.testPrincipal);
     let response: Response;
     try {
       response = await fetch(path, { headers, credentials: "same-origin" });

@@ -2,10 +2,18 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "fleet",
   "main": "worker/src/index.ts",
+  "workers_dev": false,
+  "preview_urls": false,
   "compatibility_date": "2026-08-31",
   "compatibility_flags": ["nodejs_compat"],
   "assets": {
-    "directory": "dist/client"
+    "directory": "dist/client",
+    "run_worker_first": ["/health", "/v1/*"]
+  },
+  "vars": {
+    "FLEET_ACCESS_ISSUER": "https://replace-with-team.cloudflareaccess.com",
+    "FLEET_ACCESS_AUDIENCE": "replace-with-access-application-aud",
+    "FLEET_ACCESS_JWKS_URL": "https://replace-with-team.cloudflareaccess.com/cdn-cgi/access/certs"
   },
   "d1_databases": [
     {

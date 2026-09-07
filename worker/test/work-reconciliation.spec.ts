@@ -10,7 +10,7 @@ type RequestOptions = {
 };
 
 async function apiRequest(path: string, options: RequestOptions = {}): Promise<Response> {
-  const headers = new Headers({ "X-Fleet-Auth-Mode": "test" });
+  const headers = new Headers();
   if (options.principal) headers.set("X-Fleet-Principal", options.principal);
   if (options.idempotencyKey) headers.set("Idempotency-Key", options.idempotencyKey);
   if (options.ifMatch !== undefined) headers.set("If-Match", `"${options.ifMatch}"`);

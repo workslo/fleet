@@ -2,7 +2,6 @@ import { env, exports } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 
 type RequestOptions = {
-  authMode?: "production" | "test";
   body?: unknown;
   idempotencyKey?: string;
   ifMatchHeader?: string;
@@ -13,9 +12,7 @@ type RequestOptions = {
 
 function apiRequest(path: string, options: RequestOptions = {}): Promise<Response> {
   const headers = new Headers();
-  const authMode = options.authMode ?? "test";
-  headers.set("X-Fleet-Auth-Mode", authMode);
-  if (authMode === "test" && options.principal) {
+  if (options.principal) {
     headers.set("X-Fleet-Principal", options.principal);
   }
   if (options.idempotencyKey) {
@@ -92,11 +89,6 @@ async function failIdempotencyWrite(idempotencyKey: string) {
 }
 
 describe("Fleet project lifecycle", () => {
-  it("fails closed when production authentication is not configured", async () => {
-    const response = await apiRequest("/v1/projects/missing", { authMode: "production" });
-    expect(response.status).toBe(503);
-  });
-
   it("returns JSON errors for malformed percent-encoded route IDs", async () => {
     const projectResponse = await getAs("shane", "/v1/projects/%");
     expect(projectResponse.status).toBe(400);

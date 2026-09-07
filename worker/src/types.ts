@@ -1,9 +1,28 @@
-export interface Env {
-  DB: D1Database;
-  FLEET_AUTH_MODE?: string;
-}
+export type Env = Cloudflare.Env;
 
-export type Actor = { id: string; display_name: string };
+export type PrincipalKind = "human" | "service" | "test";
+
+export type Principal = {
+  provider: "cloudflare_access" | "test";
+  issuer: string;
+  kind: PrincipalKind;
+  subject: string;
+};
+
+export type Actor = {
+  id: string;
+  display_name: string;
+  principal: Principal;
+};
+
+export function principalValues(caller: Actor) {
+  return [
+    caller.principal.provider,
+    caller.principal.issuer,
+    caller.principal.kind,
+    caller.principal.subject,
+  ] as const;
+}
 
 export type ProjectRow = {
   id: string;
