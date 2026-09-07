@@ -6,9 +6,12 @@ import { defineConfig, defineProject } from "vitest/config";
 
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 const validIssuer = "https://fleet-test.cloudflareaccess.com";
-const checkedInConfig = JSON.parse(readFileSync(path.join(projectRoot, "wrangler.jsonc"), "utf8")) as {
-  vars: { FLEET_ACCESS_ISSUER: string };
-};
+const wranglerConfigText = readFileSync(path.join(projectRoot, "wrangler.jsonc"), "utf8");
+const checkedInIssuerMatches = [...wranglerConfigText.matchAll(/^\s*"FLEET_ACCESS_ISSUER"\s*:\s*"([^"]+)"/gm)];
+if (checkedInIssuerMatches.length !== 1 || !checkedInIssuerMatches[0]?.[1]) {
+  throw new Error("wrangler.jsonc must define FLEET_ACCESS_ISSUER exactly once");
+}
+const checkedInIssuer = checkedInIssuerMatches[0][1];
 
 function workerProject(name: string, include: string[], issuer = validIssuer, exclude: string[] = []) {
   const jwksIssuer = issuer.replace(/^http:/, "https:");
@@ -47,7 +50,7 @@ export default defineConfig({
       workerProject("worker-production-identity", ["worker/test/production-identity.spec.ts"]),
       workerProject("worker-auth-jwks", ["worker/test/production-identity-jwks.spec.ts"], "https://fleet-jwks.cloudflareaccess.com"),
       workerProject("worker-auth-misconfig", ["worker/test/production-identity-misconfig.spec.ts"], "http://fleet-test.cloudflareaccess.com"),
-      workerProject("worker-auth-placeholder", ["worker/test/production-identity-placeholder.spec.ts"], checkedInConfig.vars.FLEET_ACCESS_ISSUER),
+      workerProject("worker-auth-placeholder", ["worker/test/production-identity-placeholder.spec.ts"], checkedInIssuer),
       defineProject({
         test: {
           name: "board",
