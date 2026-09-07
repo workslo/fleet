@@ -1,6 +1,10 @@
 # Fleet V1 Foundation Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Archived implementation record — do not execute.** This dated foundation
+> plan is preserved as history and contains superseded test-authentication and
+> Board examples. Current behavior is governed by `contracts/authority-v1.md`,
+> `contracts/http-v1.md`, `contracts/routine-v1.md`, and maintained onboarding
+> documentation.
 
 **Goal:** Build a local, testable Fleet control-plane slice that makes one project and one cross-agent commitment legible through a Worker API and thin Board.
 
