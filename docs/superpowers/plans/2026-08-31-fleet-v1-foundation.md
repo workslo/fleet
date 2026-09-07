@@ -1,6 +1,10 @@
 # Fleet V1 Foundation Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Archived implementation record — do not execute.** This dated foundation
+> plan is preserved as history and contains superseded test-authentication and
+> Board examples. Current behavior is governed by `contracts/authority-v1.md`,
+> `contracts/http-v1.md`, `contracts/routine-v1.md`, and maintained onboarding
+> documentation.
 
 **Goal:** Build a local, testable Fleet control-plane slice that makes one project and one cross-agent commitment legible through a Worker API and thin Board.
 
@@ -16,7 +20,7 @@
 - `CONTEXT.md` is a stable glossary, not an implementation-status surface.
 - D1 owns shared state and provenance; GitHub owns code and review evidence.
 - Actor identity comes only from a verified principal mapping, never an actor ID supplied as the caller.
-- Local tests use `FLEET_AUTH_MODE=test` plus `X-Fleet-Principal`; any other auth mode fails closed with HTTP 503 until production authentication is separately approved.
+- Local tests use controlled RS256 signing keys, a fixed Access-shaped issuer and JWKS, and explicitly enrolled test principals; the production Worker contains no test-authentication branch and checked-in placeholders fail closed with HTTP 503.
 - Every POST requires `Idempotency-Key`; mutation of an existing record also requires `If-Match: "<version>"`.
 - Work Requests create no obligation until the recipient explicitly accepts.
 - An Obligation is derived and must not be stored as its own table.

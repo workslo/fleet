@@ -1,5 +1,6 @@
 import { env, exports } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
+import { accessHeaders } from "./access-fixture";
 
 type RequestOptions = {
   body?: unknown;
@@ -10,8 +11,8 @@ type RequestOptions = {
 };
 
 async function apiRequest(path: string, options: RequestOptions = {}): Promise<Response> {
-  const headers = new Headers({ "X-Fleet-Auth-Mode": "test" });
-  if (options.principal) headers.set("X-Fleet-Principal", options.principal);
+  const headers = options.principal ? await accessHeaders(options.principal) : new Headers();
+  if (options.principal === "shane" && options.body !== undefined) headers.set("Origin", "https://fleet.test");
   if (options.idempotencyKey) headers.set("Idempotency-Key", options.idempotencyKey);
   if (options.ifMatch !== undefined) headers.set("If-Match", `"${options.ifMatch}"`);
   if (options.body !== undefined) headers.set("Content-Type", "application/json");

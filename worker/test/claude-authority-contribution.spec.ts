@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { exports } from "cloudflare:workers";
+import { accessHeaders } from "./access-fixture";
 
 // Claude seat contribution — the bounded authority-test lane requested by the
 // Project Owner (Fleet V1 Foundation): HTTP-level cross-seat and Shane-only
@@ -8,7 +9,6 @@ import { exports } from "cloudflare:workers";
 // project-lifecycle.spec.ts so the suite reads as one house.
 
 type RequestOptions = {
-  authMode?: "production" | "test";
   body?: unknown;
   idempotencyKey?: string;
   ifMatch?: number;
@@ -16,10 +16,9 @@ type RequestOptions = {
   principal?: string;
 };
 
-function apiRequest(path: string, options: RequestOptions = {}): Promise<Response> {
-  const headers = new Headers();
-  headers.set("X-Fleet-Auth-Mode", options.authMode ?? "test");
-  if (options.principal) headers.set("X-Fleet-Principal", options.principal);
+async function apiRequest(path: string, options: RequestOptions = {}): Promise<Response> {
+  const headers = options.principal ? await accessHeaders(options.principal) : new Headers();
+  if (options.principal === "shane" && options.body !== undefined) headers.set("Origin", "https://fleet.test");
   if (options.idempotencyKey) headers.set("Idempotency-Key", options.idempotencyKey);
   if (options.ifMatch !== undefined) headers.set("If-Match", `"${options.ifMatch}"`);
   if (options.body !== undefined) headers.set("Content-Type", "application/json");

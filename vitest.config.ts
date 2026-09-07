@@ -1,31 +1,56 @@
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { cloudflareTest, readD1Migrations } from "@cloudflare/vitest-plugin";
 import { defineConfig, defineProject } from "vitest/config";
 
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
+const validIssuer = "https://fleet-test.cloudflareaccess.com";
+const wranglerConfigText = readFileSync(path.join(projectRoot, "wrangler.jsonc"), "utf8");
+const checkedInIssuerMatches = [...wranglerConfigText.matchAll(/^\s*"FLEET_ACCESS_ISSUER"\s*:\s*"([^"]+)"/gm)];
+if (checkedInIssuerMatches.length !== 1 || !checkedInIssuerMatches[0]?.[1]) {
+  throw new Error("wrangler.jsonc must define FLEET_ACCESS_ISSUER exactly once");
+}
+const checkedInIssuer = checkedInIssuerMatches[0][1];
+
+function workerProject(name: string, include: string[], issuer = validIssuer, exclude: string[] = []) {
+  const jwksIssuer = issuer.replace(/^http:/, "https:");
+  return defineProject({
+    plugins: [
+      cloudflareTest(async () => ({
+        wrangler: { configPath: "./wrangler.jsonc" },
+        miniflare: {
+          bindings: {
+            FLEET_ACCESS_AUDIENCE: "fleet-test-audience",
+            FLEET_ACCESS_ISSUER: issuer,
+            FLEET_ACCESS_JWKS_URL: `${jwksIssuer}/cdn-cgi/access/certs`,
+            TEST_MIGRATIONS: await readD1Migrations(path.join(projectRoot, "worker/migrations")),
+          },
+        },
+      })),
+    ],
+    test: {
+      name,
+      include,
+      exclude,
+      setupFiles: ["./worker/test/apply-migrations.ts"],
+    },
+  });
+}
 
 export default defineConfig({
   test: {
     projects: [
-      defineProject({
-        plugins: [
-          cloudflareTest(async () => ({
-            wrangler: { configPath: "./wrangler.jsonc" },
-            miniflare: {
-              bindings: {
-                FLEET_AUTH_MODE: "test",
-                TEST_MIGRATIONS: await readD1Migrations(path.join(projectRoot, "worker/migrations")),
-              },
-            },
-          })),
-        ],
-        test: {
-          name: "worker",
-          include: ["worker/test/**/*.spec.ts"],
-          setupFiles: ["./worker/test/apply-migrations.ts"],
-        },
-      }),
+      workerProject("worker", ["worker/test/**/*.spec.ts"], validIssuer, [
+        "worker/test/production-identity-jwks.spec.ts",
+        "worker/test/production-identity-misconfig.spec.ts",
+        "worker/test/production-identity-placeholder.spec.ts",
+        "worker/test/production-identity.spec.ts",
+      ]),
+      workerProject("worker-production-identity", ["worker/test/production-identity.spec.ts"]),
+      workerProject("worker-auth-jwks", ["worker/test/production-identity-jwks.spec.ts"], "https://fleet-jwks.cloudflareaccess.com"),
+      workerProject("worker-auth-misconfig", ["worker/test/production-identity-misconfig.spec.ts"], "http://fleet-test.cloudflareaccess.com"),
+      workerProject("worker-auth-placeholder", ["worker/test/production-identity-placeholder.spec.ts"], checkedInIssuer),
       defineProject({
         test: {
           name: "board",

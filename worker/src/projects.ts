@@ -1,4 +1,5 @@
 import { error, isResponse, json, requestJson } from "./http";
+import { principalValues } from "./types";
 import type { Actor, AuthorizationInput, Env, ProjectRow } from "./types";
 
 type IdempotencyRecord = {
@@ -188,7 +189,11 @@ export async function createProject(request: Request, env: Env, caller: Actor): 
   try {
     await env.DB.batch([
       env.DB.prepare("INSERT INTO projects (id, slug, title, originator_id, submitter_id, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'Proposed', ?, ?)").bind(id, input.slug, input.title, input.originator_id, caller.id, now, now),
-      env.DB.prepare("INSERT INTO activity_events (project_id, actor_id, type, payload_json, created_at) VALUES (?, ?, 'project.proposed', ?, ?)").bind(id, caller.id, JSON.stringify({ slug: input.slug }), now),
+      env.DB.prepare(
+        `INSERT INTO activity_events
+          (project_id, actor_id, principal_provider, principal_issuer, principal_kind, principal_subject, type, payload_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'project.proposed', ?, ?)`,
+      ).bind(id, caller.id, ...principalValues(caller), JSON.stringify({ slug: input.slug }), now),
       idempotencyStatement(env, caller, request, idempotency, 201, responseBody),
     ]);
   } catch {
@@ -260,11 +265,12 @@ export async function authorizeProject(request: Request, env: Env, caller: Actor
           WHERE id = ? AND version = ? AND state = 'Authorized' AND proposed_owner_id = ?`,
       ).bind(projectId, caller.id, input.plan, now, projectId, version + 1, input.proposed_owner_id),
       env.DB.prepare(
-        `INSERT INTO activity_events (project_id, actor_id, type, payload_json, created_at)
-         SELECT ?, ?, 'project.authorized', ?, ?
+        `INSERT INTO activity_events
+          (project_id, actor_id, principal_provider, principal_issuer, principal_kind, principal_subject, type, payload_json, created_at)
+         SELECT ?, ?, ?, ?, ?, ?, 'project.authorized', ?, ?
            FROM projects
           WHERE id = ? AND version = ? AND state = 'Authorized' AND proposed_owner_id = ?`,
-      ).bind(projectId, caller.id, JSON.stringify({ proposed_owner_id: input.proposed_owner_id }), now, projectId, version + 1, input.proposed_owner_id),
+      ).bind(projectId, caller.id, ...principalValues(caller), JSON.stringify({ proposed_owner_id: input.proposed_owner_id }), now, projectId, version + 1, input.proposed_owner_id),
       env.DB.prepare(
         `INSERT INTO idempotency_records (actor_id, idempotency_key, method, path, request_hash, response_status, response_body)
          SELECT ?, ?, ?, ?, ?, 200, ?
@@ -327,11 +333,12 @@ export async function acceptOwnership(request: Request, env: Env, caller: Actor,
         "UPDATE projects SET owner_id = ?, proposed_owner_id = NULL, state = 'Active', version = version + 1, updated_at = ? WHERE id = ? AND version = ? AND state = 'Authorized' AND proposed_owner_id = ?",
       ).bind(caller.id, now, projectId, version, caller.id),
       env.DB.prepare(
-        `INSERT INTO activity_events (project_id, actor_id, type, payload_json, created_at)
-         SELECT ?, ?, 'project.owner_accepted', '{}', ?
+        `INSERT INTO activity_events
+          (project_id, actor_id, principal_provider, principal_issuer, principal_kind, principal_subject, type, payload_json, created_at)
+         SELECT ?, ?, ?, ?, ?, ?, 'project.owner_accepted', '{}', ?
            FROM projects
           WHERE id = ? AND version = ? AND state = 'Active' AND owner_id = ?`,
-      ).bind(projectId, caller.id, now, projectId, version + 1, caller.id),
+      ).bind(projectId, caller.id, ...principalValues(caller), now, projectId, version + 1, caller.id),
       env.DB.prepare(
         `INSERT INTO idempotency_records (actor_id, idempotency_key, method, path, request_hash, response_status, response_body)
          SELECT ?, ?, ?, ?, ?, 200, ?

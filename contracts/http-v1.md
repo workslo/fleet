@@ -10,7 +10,8 @@ All errors have this shape:
 
 | Route | Purpose |
 | --- | --- |
-| `GET /health` | Unauthenticated process health. |
+| `GET /health` | Static process health; contains no Fleet state or identity. |
+| `GET /v1/me` | Return the authenticated Fleet actor and resolved principal provenance. |
 | `GET /v1/portfolio` | List project cards. |
 | `POST /v1/projects` | Propose a project with `slug`, `title`, and `originator_id`. |
 | `POST /v1/projects/:id/authorize` | Shane authorizes with `proposed_owner_id`, `outcome`, `scope`, `exclusions`, `delegated_actions`, `gates`, `validation_evidence`, and `plan`. |
@@ -29,8 +30,42 @@ authenticated actor, request path, method, and payload returns the stored
 response; reuse with a different payload fails. Versioned transitions also
 require `If-Match: "<version>"` set to the current project version.
 
+All `/v1/*` routes require a verified principal. Production callers send no
+Fleet actor identifier: Cloudflare Access adds `Cf-Access-Jwt-Assertion`, and
+the Worker resolves that verified principal through the active mapping table.
+For a browser-authenticated human, non-read mutations require an `Origin`
+matching the request origin. Fleet does not enable cross-origin Board writes.
+Such browser mutations also require `Content-Type: application/json`.
+
+All `/v1/*` routes are Worker-first in the Static Assets configuration. Board
+build output must not occupy `/v1/*` or `/health`. In production, the Access
+application also protects `/health`; an authorized monitoring service token may
+reach the static health response without needing a Fleet actor mapping.
+
+`GET /v1/me` returns the server-resolved identity:
+
+```json
+{
+  "actor": { "id": "codex", "display_name": "Codex" },
+  "principal": {
+    "provider": "cloudflare_access",
+    "issuer": "https://team.cloudflareaccess.com",
+    "kind": "service",
+    "subject": "client-id.access"
+  }
+}
+```
+
+The `subject` is identity metadata, not a credential secret. Clients should use
+`actor.id` for Fleet authority and treat principal details as verification
+provenance.
+
 Request acceptance and fulfillment use the same idempotency behavior. Their
 `If-Match: "<version>"` refers to the Work Request's current version.
+
+New activity entries include a `principal` object alongside `actor`, preserving
+which enrolled human or service identity authenticated the mutation. Activity
+created before principal provenance was added may return `principal: null`.
 
 ## AgentWorkSnapshot
 

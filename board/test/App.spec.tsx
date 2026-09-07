@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "../src/App";
-import { FleetApi } from "../src/api";
 
 const project = {
   id: "project-1",
@@ -53,6 +52,10 @@ function deferred<T>() {
 function mockApi(overrides: Record<string, unknown> = {}) {
   vi.stubGlobal("fetch", vi.fn((input: string | URL | Request) => {
     const path = typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
+    if (path.endsWith("/v1/me")) return response(overrides.identity ?? {
+      actor: { display_name: "Codex", id: "codex" },
+      principal: { issuer: "https://fleet-test.cloudflareaccess.com", kind: "service", provider: "cloudflare_access", subject: "codex-test.access" },
+    });
     if (path.endsWith("/v1/portfolio")) return response(overrides.portfolio ?? { projects: [project] });
     if (path.endsWith("/v1/me/work?after=0")) return response(overrides.work ?? work);
     if (path.endsWith("/v1/decisions")) return response(overrides.decisions ?? { decisions: [{ id: "decision-1", project_id: "project-1", question: "Approve the Fleet Board?", state: "Pending", created_at: "2026-08-31T00:00:00Z" }] });
@@ -67,21 +70,11 @@ afterEach(() => {
 });
 
 describe("Fleet Board", () => {
-  it("sends an explicit local test principal and omits it otherwise at the Worker HTTP boundary", async () => {
-    const fetchMock = vi.fn(() => response({ projects: [] }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    await new FleetApi("codex").portfolio();
-    await new FleetApi().portfolio();
-
-    expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("X-Fleet-Principal")).toBe("codex");
-    expect(new Headers(fetchMock.mock.calls[1]?.[1]?.headers).has("X-Fleet-Principal")).toBe(false);
-  });
-
   it("shows project provenance, ownership, plan, state, health, next action, and evidence", async () => {
     mockApi();
-    render(<App principal="codex" />);
+    render(<App />);
 
+    expect(await screen.findByText("Signed in as Codex (service principal)")).toBeVisible();
     await userEvent.click(await screen.findByRole("link", { name: "Fleet V1 Foundation" }));
 
     expect(await screen.findByText("Originator: Shane Slosar")).toBeVisible();
@@ -95,7 +88,7 @@ describe("Fleet Board", () => {
 
   it("separates obligations, outbound requests, inbound requests, and Pull Candidates", async () => {
     mockApi();
-    render(<App principal="codex" />);
+    render(<App />);
 
     await userEvent.click(await screen.findByRole("link", { name: "My Work" }));
 
@@ -111,7 +104,7 @@ describe("Fleet Board", () => {
 
   it("explains empty views and recovers global errors with retry", async () => {
     mockApi({ portfolio: { projects: [] }, work: { ...work, pull_candidates: [] }, decisions: { decisions: [] } });
-    render(<App principal="codex" />);
+    render(<App />);
 
     expect(await screen.findByText("No Fleet Projects are visible yet. Shared project records will appear here.")).toBeVisible();
     await userEvent.click(screen.getByRole("link", { name: "Pull Candidates" }));
@@ -121,7 +114,7 @@ describe("Fleet Board", () => {
 
     cleanup();
     vi.stubGlobal("fetch", vi.fn(() => response({ error: "unavailable", message: "Fleet is unavailable" }, 503)));
-    render(<App principal="codex" />);
+    render(<App />);
     expect(await screen.findByText("Fleet is unavailable")).toBeVisible();
     mockApi({ portfolio: { projects: [] }, work: { ...work, pull_candidates: [] }, decisions: { decisions: [] } });
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
@@ -132,8 +125,26 @@ describe("Fleet Board", () => {
     vi.stubGlobal("fetch", vi.fn(() => response({ error: "auth_unavailable", message: "production authentication is not configured" }, 503)));
     render(<App />);
 
-    expect(await screen.findByText("Fleet Board is unavailable until production authentication is configured.")).toBeVisible();
-    expect(screen.getByText("production authentication is not configured")).toBeVisible();
+    expect(await screen.findByText("production authentication is not configured")).toBeVisible();
+    expect(screen.queryByText(/Signed in as/)).not.toBeInTheDocument();
+  });
+
+  it("shows the actor resolved by production authentication instead of a caller-supplied name", async () => {
+    mockApi({
+      identity: {
+        actor: { display_name: "Shane Slosar", id: "shane" },
+        principal: {
+          issuer: "https://fleet.cloudflareaccess.com",
+          kind: "human",
+          provider: "cloudflare_access",
+          subject: "stable-human-subject",
+        },
+      },
+    });
+    render(<App />);
+
+    expect(await screen.findByText("Signed in as Shane Slosar (human principal)")).toBeVisible();
+    expect(screen.queryByText("stable-human-subject")).toBeNull();
   });
 
   it("retries a failed project-detail request and refreshes its content", async () => {
@@ -142,6 +153,10 @@ describe("Fleet Board", () => {
     let projectCalls = 0;
     const fetchMock = vi.fn((input: string | URL | Request) => {
       const path = typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
+      if (path.endsWith("/v1/me")) return response({
+        actor: { display_name: "Codex", id: "codex" },
+        principal: { issuer: "https://fleet-test.cloudflareaccess.com", kind: "service", provider: "cloudflare_access", subject: "codex-test.access" },
+      });
       if (path.endsWith("/v1/portfolio")) return response({ projects: [project] });
       if (path.endsWith("/v1/me/work?after=0")) return response(work);
       if (path.endsWith("/v1/decisions")) return response({ decisions: [] });
@@ -152,7 +167,7 @@ describe("Fleet Board", () => {
       return response({ error: "not_found", message: "route does not exist" }, 404);
     });
     vi.stubGlobal("fetch", fetchMock);
-    render(<App principal="codex" />);
+    render(<App />);
 
     await userEvent.click(await screen.findByRole("link", { name: "Fleet V1 Foundation" }));
     expect(screen.getByRole("status", { name: "Loading project details…" })).toBeVisible();

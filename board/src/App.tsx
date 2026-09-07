@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { FleetApi, FleetApiError, type AgentWorkSnapshot, type Decision, type ProjectCard } from "./api";
+import { FleetApi, FleetApiError, type AgentWorkSnapshot, type Decision, type FleetIdentity, type ProjectCard } from "./api";
 import { DecisionsView } from "./views/DecisionsView";
 import { MyWorkView } from "./views/MyWorkView";
 import { PortfolioView } from "./views/PortfolioView";
@@ -7,14 +7,14 @@ import { ProjectView } from "./views/ProjectView";
 import { PullCandidatesView } from "./views/PullCandidatesView";
 
 type View = "portfolio" | "my-work" | "pull-candidates" | "decisions" | "project";
-type BoardData = { projects: ProjectCard[]; work: AgentWorkSnapshot; decisions: Decision[] };
+type BoardData = { identity: FleetIdentity | null; projects: ProjectCard[]; work: AgentWorkSnapshot; decisions: Decision[] };
 type BoardError = { message: string; scope: "global" | "project" };
 
 const emptyWork: AgentWorkSnapshot = { obligations: [], outbound_requests: [], inbound_requests: [], pull_candidates: [], activity: [], next_cursor: "0" };
-const emptyData: BoardData = { projects: [], work: emptyWork, decisions: [] };
+const emptyData: BoardData = { identity: null, projects: [], work: emptyWork, decisions: [] };
 
-export function App({ principal }: { principal?: string }) {
-  const api = useMemo(() => new FleetApi(principal), [principal]);
+export function App() {
+  const api = useMemo(() => new FleetApi(), []);
   const [data, setData] = useState<BoardData>(emptyData);
   const [view, setView] = useState<View>("portfolio");
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
@@ -27,8 +27,13 @@ export function App({ principal }: { principal?: string }) {
     setLoading(true);
     setError(null);
     try {
-      const [portfolio, work, decisions] = await Promise.all([api.portfolio(), api.myWork(), api.decisions()]);
-      setData({ projects: portfolio.projects, work, decisions: decisions.decisions });
+      const [identity, portfolio, work, decisions] = await Promise.all([
+        api.identity(),
+        api.portfolio(),
+        api.myWork(),
+        api.decisions(),
+      ]);
+      setData({ identity, projects: portfolio.projects, work, decisions: decisions.decisions });
     } catch (caught) {
       setError({ message: caught instanceof FleetApiError ? caught.message : "Fleet could not be loaded. Retry the request.", scope: "global" });
     } finally {
@@ -70,7 +75,9 @@ export function App({ principal }: { principal?: string }) {
     <div className="app-shell">
       <header className="site-header">
         <p className="eyebrow">Fleet Board</p>
-        {principal ? <p className="principal">Viewing shared work for {principal}</p> : <p className="principal" role="note">Fleet Board is unavailable until production authentication is configured.</p>}
+        {data.identity
+          ? <p className="principal">Signed in as {data.identity.actor.display_name} ({data.identity.principal.kind} principal)</p>
+          : null}
         <nav aria-label="Fleet Board views">
           <a href="#portfolio" aria-current={view === "portfolio" ? "page" : undefined} onClick={(event) => { event.preventDefault(); setView("portfolio"); }}>Portfolio</a>
           <a href="#my-work" aria-current={view === "my-work" ? "page" : undefined} onClick={(event) => { event.preventDefault(); setView("my-work"); }}>My Work</a>

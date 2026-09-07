@@ -1,4 +1,4 @@
-import { resolveCaller } from "./auth";
+import { enforceSameOriginMutation, resolveCaller } from "./auth";
 import { error, isResponse, json } from "./http";
 import { acceptOwnership, authorizeProject, createProject, getProject, portfolio } from "./projects";
 import { acceptRequest, activity, createPullCandidate, createRequest, decisions, fulfillRequest, myWork } from "./work";
@@ -21,6 +21,14 @@ export default {
 
     const caller = await resolveCaller(request, env);
     if (isResponse(caller)) return caller;
+    const originFailure = enforceSameOriginMutation(request, caller);
+    if (originFailure) return originFailure;
+    if (request.method === "GET" && url.pathname === "/v1/me") {
+      return json({
+        actor: { id: caller.id, display_name: caller.display_name },
+        principal: caller.principal,
+      });
+    }
     if (request.method === "GET" && url.pathname === "/v1/portfolio") return portfolio(env);
     if (request.method === "GET" && url.pathname === "/v1/me/work") return myWork(env, caller, url.searchParams.get("after"));
     if (request.method === "GET" && url.pathname === "/v1/activity") return activity(env, url.searchParams.get("after"));

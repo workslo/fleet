@@ -1,8 +1,8 @@
 import { env, exports } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
+import { accessHeaders } from "./access-fixture";
 
 type RequestOptions = {
-  authMode?: "production" | "test";
   body?: unknown;
   idempotencyKey?: string;
   ifMatchHeader?: string;
@@ -11,13 +11,9 @@ type RequestOptions = {
   principal?: string;
 };
 
-function apiRequest(path: string, options: RequestOptions = {}): Promise<Response> {
-  const headers = new Headers();
-  const authMode = options.authMode ?? "test";
-  headers.set("X-Fleet-Auth-Mode", authMode);
-  if (authMode === "test" && options.principal) {
-    headers.set("X-Fleet-Principal", options.principal);
-  }
+async function apiRequest(path: string, options: RequestOptions = {}): Promise<Response> {
+  const headers = options.principal ? await accessHeaders(options.principal) : new Headers();
+  if (options.principal === "shane" && options.body !== undefined) headers.set("Origin", "https://fleet.test");
   if (options.idempotencyKey) {
     headers.set("Idempotency-Key", options.idempotencyKey);
   }
@@ -92,11 +88,6 @@ async function failIdempotencyWrite(idempotencyKey: string) {
 }
 
 describe("Fleet project lifecycle", () => {
-  it("fails closed when production authentication is not configured", async () => {
-    const response = await apiRequest("/v1/projects/missing", { authMode: "production" });
-    expect(response.status).toBe(503);
-  });
-
   it("returns JSON errors for malformed percent-encoded route IDs", async () => {
     const projectResponse = await getAs("shane", "/v1/projects/%");
     expect(projectResponse.status).toBe(400);
