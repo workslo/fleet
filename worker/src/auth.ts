@@ -7,7 +7,7 @@ type ActorPrincipalRow = {
   display_name: string;
   issuer: string;
   kind: PrincipalKind;
-  provider: "cloudflare_access" | "test";
+  provider: "cloudflare_access";
   subject: string;
 };
 
@@ -121,21 +121,8 @@ async function resolveAccessCaller(request: Request, env: Env): Promise<Actor | 
   }
 }
 
-function testMode(env: object): boolean {
-  return "FLEET_AUTH_MODE" in env && env.FLEET_AUTH_MODE === "test";
-}
-
 export async function resolveCaller(request: Request, env: Env): Promise<Actor | Response> {
-  if (!testMode(env)) {
-    return resolveAccessCaller(request, env);
-  }
-
-  const subject = request.headers.get("X-Fleet-Principal");
-  if (!subject) {
-    return error("unauthorized", "X-Fleet-Principal is required in test mode", 401);
-  }
-
-  return activeActor(env, { provider: "test", issuer: "", kind: "test", subject });
+  return resolveAccessCaller(request, env);
 }
 
 export function enforceSameOriginMutation(request: Request, caller: Actor): Response | null {

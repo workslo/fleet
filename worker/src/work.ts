@@ -272,9 +272,9 @@ type ActivityRow = {
   id: number;
   project_id: string;
   actor_id: string;
-  principal_provider: "cloudflare_access" | "test" | null;
+  principal_provider: "cloudflare_access" | null;
   principal_issuer: string | null;
-  principal_kind: "human" | "service" | "test" | null;
+  principal_kind: "human" | "service" | null;
   principal_subject: string | null;
   type: string;
   payload_json: string;

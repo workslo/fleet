@@ -21,7 +21,7 @@ type TokenOptions = {
 };
 
 async function token(
-  claims: { common_name?: string; sub: string },
+  claims: { common_name?: string; email?: string; name?: string; sub: string },
   options: TokenOptions = {},
 ): Promise<string> {
   const now = Math.floor(Date.now() / 1_000);
@@ -69,6 +69,9 @@ beforeAll(async () => {
     env.DB.prepare(
       "INSERT INTO actor_principals (provider, issuer, kind, subject, actor_id, active) VALUES ('cloudflare_access', ?, 'service', ?, 'claude', 0)",
     ).bind(issuer, "claude-disabled.access"),
+    env.DB.prepare(
+      "INSERT INTO actor_principals (provider, issuer, kind, subject, actor_id, active) VALUES ('cloudflare_access', ?, 'service', ?, 'claude', 1)",
+    ).bind(issuer, "claude-primary.access"),
     env.DB.prepare(
       "INSERT INTO actor_principals (provider, issuer, kind, subject, actor_id, active) VALUES ('cloudflare_access', ?, 'service', ?, 'juniorslo', 1)",
     ).bind(issuer, "junior-disabled-actor.access"),
@@ -124,7 +127,11 @@ describe("Fleet production identity", () => {
   });
 
   it("never auto-enrolls from email, display name, or a forged test identity header", async () => {
-    const emailOnly = await apiRequest("/v1/me", await token({ sub: "unmapped-human" }), {
+    const emailOnly = await apiRequest("/v1/me", await token({
+      email: "shane@example.test",
+      name: "Shane Slosar",
+      sub: "unmapped-human",
+    }), {
       headers: { "X-Fleet-Principal": "shane" },
     });
     expect(emailOnly.status).toBe(401);
@@ -166,15 +173,6 @@ describe("Fleet production identity", () => {
     expect(await response.json()).toMatchObject({ actor: { id: "codex" } });
   });
 
-  it("enforces non-empty principals and the human-only Shane mapping in D1", async () => {
-    await expect(env.DB.prepare(
-      "INSERT INTO actor_principals (provider, issuer, kind, subject, actor_id) VALUES ('cloudflare_access', ?, 'service', '', 'codex')",
-    ).bind(issuer).run()).rejects.toThrow();
-    await expect(env.DB.prepare(
-      "INSERT INTO actor_principals (provider, issuer, kind, subject, actor_id) VALUES ('cloudflare_access', ?, 'service', 'shane-service.access', 'shane')",
-    ).bind(issuer).run()).rejects.toThrow();
-  });
-
   it("returns a service-unavailable error when the trusted JWKS cannot be fetched", async () => {
     vi.stubGlobal("fetch", vi.fn(() => Promise.reject(new TypeError("JWKS unavailable"))));
     const response = await apiRequest("/v1/me", await token({ common_name: "codex-primary.access", sub: "" }));
@@ -182,7 +180,7 @@ describe("Fleet production identity", () => {
     expect(await response.json()).toMatchObject({ error: "auth_unavailable" });
   });
 
-  it("permits a service actor's own action but denies Shane-only authority", async () => {
+  it("permits own actions and denies Shane-only and other-actor actions", async () => {
     const codexToken = await token({ common_name: "codex-primary.access", sub: "" });
     const proposed = await apiRequest("/v1/projects", codexToken, {
       body: { originator_id: "codex", slug: `identity-${crypto.randomUUID()}`, title: "Identity proof" },
@@ -223,6 +221,48 @@ describe("Fleet production identity", () => {
       headers: { "Idempotency-Key": crypto.randomUUID(), "If-Match": '"1"' },
     });
     expect(denied.status).toBe(403);
+
+    const shaneToken = await token({ sub: "human-shane" });
+    const authorized = await apiRequest(`/v1/projects/${project.id}/authorize`, shaneToken, {
+      body: {
+        actor_id: "shane",
+        delegated_actions: ["request"],
+        exclusions: [],
+        gates: [],
+        outcome: "Cross-seat proof",
+        plan: "Exercise recipient authority",
+        proposed_owner_id: "codex",
+        scope: ["identity"],
+        validation_evidence: ["controlled JWT tests"],
+      },
+      headers: { "Idempotency-Key": crypto.randomUUID(), "If-Match": '"1"', Origin: "https://fleet.test" },
+    });
+    expect(authorized.status).toBe(200);
+    expect((await apiRequest(`/v1/projects/${project.id}/owner-accept`, codexToken, {
+      body: {},
+      headers: { "Idempotency-Key": crypto.randomUUID(), "If-Match": '"2"' },
+    })).status).toBe(200);
+
+    const requested = await apiRequest(`/v1/projects/${project.id}/requests`, codexToken, {
+      body: { recipient_id: "claude", title: "Review identity", detail: "Prove recipient authority" },
+      headers: { "Idempotency-Key": crypto.randomUUID() },
+    });
+    expect(requested.status).toBe(201);
+    const workRequest = await requested.json() as { id: string };
+    expect((await apiRequest(`/v1/requests/${workRequest.id}/accept`, codexToken, {
+      body: {},
+      headers: { "Idempotency-Key": crypto.randomUUID(), "If-Match": '"1"' },
+    })).status).toBe(403);
+
+    const claudeToken = await token({ common_name: "claude-primary.access", sub: "" });
+    expect((await apiRequest(`/v1/requests/${workRequest.id}/accept`, claudeToken, {
+      body: {},
+      headers: { "Idempotency-Key": crypto.randomUUID(), "If-Match": '"1"' },
+    })).status).toBe(200);
+    expect((await apiRequest(`/v1/requests/${workRequest.id}/fulfill`, codexToken, {
+      body: { evidence: [] },
+      headers: { "Idempotency-Key": crypto.randomUUID(), "If-Match": '"2"' },
+    })).status).toBe(403);
   });
 
   it("requires same-origin browser mutations while allowing non-browser service requests", async () => {

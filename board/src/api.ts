@@ -3,9 +3,9 @@ export type ActorRef = { id: string };
 export type FleetIdentity = {
   actor: { id: string; display_name: string };
   principal: {
-    provider: "cloudflare_access" | "test";
+    provider: "cloudflare_access";
     issuer: string;
-    kind: "human" | "service" | "test";
+    kind: "human" | "service";
     subject: string;
   };
 };

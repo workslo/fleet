@@ -1,9 +1,9 @@
 export type Env = Cloudflare.Env;
 
-export type PrincipalKind = "human" | "service" | "test";
+export type PrincipalKind = "human" | "service";
 
 export type Principal = {
-  provider: "cloudflare_access" | "test";
+  provider: "cloudflare_access";
   issuer: string;
   kind: PrincipalKind;
   subject: string;

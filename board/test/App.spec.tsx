@@ -54,7 +54,7 @@ function mockApi(overrides: Record<string, unknown> = {}) {
     const path = typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
     if (path.endsWith("/v1/me")) return response(overrides.identity ?? {
       actor: { display_name: "Codex", id: "codex" },
-      principal: { issuer: "", kind: "test", provider: "test", subject: "codex" },
+      principal: { issuer: "https://fleet-test.cloudflareaccess.com", kind: "service", provider: "cloudflare_access", subject: "codex-test.access" },
     });
     if (path.endsWith("/v1/portfolio")) return response(overrides.portfolio ?? { projects: [project] });
     if (path.endsWith("/v1/me/work?after=0")) return response(overrides.work ?? work);
@@ -74,7 +74,7 @@ describe("Fleet Board", () => {
     mockApi();
     render(<App />);
 
-    expect(await screen.findByText("Signed in as Codex (test principal)")).toBeVisible();
+    expect(await screen.findByText("Signed in as Codex (service principal)")).toBeVisible();
     await userEvent.click(await screen.findByRole("link", { name: "Fleet V1 Foundation" }));
 
     expect(await screen.findByText("Originator: Shane Slosar")).toBeVisible();
@@ -155,7 +155,7 @@ describe("Fleet Board", () => {
       const path = typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
       if (path.endsWith("/v1/me")) return response({
         actor: { display_name: "Codex", id: "codex" },
-        principal: { issuer: "", kind: "test", provider: "test", subject: "codex" },
+        principal: { issuer: "https://fleet-test.cloudflareaccess.com", kind: "service", provider: "cloudflare_access", subject: "codex-test.access" },
       });
       if (path.endsWith("/v1/portfolio")) return response({ projects: [project] });
       if (path.endsWith("/v1/me/work?after=0")) return response(work);

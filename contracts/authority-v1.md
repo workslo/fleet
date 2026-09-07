@@ -23,10 +23,10 @@ acceptance-authority actor. The service Client ID is an identifier and may be
 stored for enrollment and provenance; the Client Secret is a credential and
 must never enter D1 or an artifact.
 
-In local tests only, when `FLEET_AUTH_MODE=test`, `X-Fleet-Principal` is
-resolved through the explicit `test` principal mappings. A request can force
-the production path for verification, but a production environment never
-honors test identity headers.
+The production Worker has no test-authentication branch and never honors a
+caller-supplied identity header. Worker-runtime tests use controlled signing
+keys, a fixed test issuer and JWKS, and explicitly enrolled Access-shaped
+principals to exercise the same resolver as production.
 
 Shane alone may authorize or cancel a project, record final acceptance, or
 approve a material Authorized Project Envelope change. A proposed Project
