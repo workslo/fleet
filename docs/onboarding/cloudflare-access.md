@@ -92,14 +92,18 @@ Do not add an application-level bearer fallback unless a participating native
 surface first demonstrates that neither supported Access header form works.
 Such a fallback would be a separately reviewed identity system.
 
-The current `routines/reference-client.ts` is not production identity-ready.
-It models one configurable identity header and defaults to the retired
-`X-Fleet-Principal` test seam, so it cannot express Access's normal two-header
-service-token exchange and its default is rejected by this Worker. Replacing
-that interface with the proven two-header form or an owner-configured combined
-header is a separate native-integration change to coordinate with the Routine
-owner. Until that happens, do not report the reference client as native proof
-and do not add a bearer or OAuth workaround.
+The `routines/reference-client.ts` auth interface now models the two supported
+transports: an explicit `access-pair` mode that sends Access's normal
+two-header service-credential exchange (CF-Access-Client-Id /
+CF-Access-Client-Secret, sourced from a caller-injected request-time
+credential provider — the portable module never reads the environment), and an
+explicit `external` mode that sends no auth headers at all (proxy-managed
+injection). The retired `X-Fleet-Principal` caller-identity seam is no longer
+supported, and there is no default transport. This is the client-side wiring
+only: whether a runtime's vault/proxy actually delivers the exact Access
+headers remains unverified until the live probe against the configured
+application. Until that probe, do not report the reference client as native
+proof and do not add a bearer or OAuth workaround.
 
 ## Required native proof
 

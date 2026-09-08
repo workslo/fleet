@@ -24,6 +24,8 @@
  *     enter Fleet. This client exposes only Fleet API endpoints.
  */
 
+import { buildAuthHeaders, type ReferenceClientAuth } from "./access-auth";
+
 // ---------------------------------------------------------------------------
 // Contract types — matching contracts/http-v1.md
 // ---------------------------------------------------------------------------
@@ -180,8 +182,18 @@ export class FleetRoutineError extends Error {
 export interface FleetRoutineClientOptions {
   /** Base URL of the Fleet Worker, e.g. "https://fleet.workslo.ai". */
   baseUrl: string;
-  /** The authenticated actor's principal id, e.g. "juniorslo". */
-  principal: string;
+  /**
+   * Explicit auth selection — no default. Either "access-pair" (the client
+   * sends the two Cloudflare Access service-credential headers sourced from
+   * the caller's injected request-time provider) or "external" (the client
+   * sends no auth headers; an external proxy layer injects them).
+   *
+   * The actor identity is never caller-supplied: the Fleet Worker derives it
+   * from the verified Access JWT (workslo/fleet#31). The retired
+   * caller-identity header assumption ("X-Fleet-Principal") is intentionally
+   * not supported.
+   */
+  auth: ReferenceClientAuth;
   /** Native-platform cursor persistence. Required. */
   cursorStore: CursorStore;
   /**
@@ -190,8 +202,6 @@ export interface FleetRoutineClientOptions {
    * dependency-free and platform-agnostic.
    */
   fetchFn: FetchLike;
-  /** Auth header name. Defaults to "X-Fleet-Principal" (test mode). */
-  authHeader?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -202,15 +212,23 @@ export class FleetRoutineClient {
   private readonly baseUrl: string;
   private readonly fetchFn: FetchLike;
   private readonly cursorStore: CursorStore;
-  private readonly authHeaders: Record<string, string>;
+  private readonly auth: ReferenceClientAuth;
 
   constructor(opts: FleetRoutineClientOptions) {
     this.baseUrl = opts.baseUrl.replace(/\/+$/, "");
     this.fetchFn = opts.fetchFn;
     this.cursorStore = opts.cursorStore;
-    this.authHeaders = {
-      [opts.authHeader ?? "X-Fleet-Principal"]: opts.principal,
-    };
+    this.auth = opts.auth;
+  }
+
+  /**
+   * Resolve the auth headers for one request. Invoked per request (not in
+   * the constructor) so request-time credential providers are read fresh,
+   * and so a provider failure surfaces BEFORE any network call or cursor
+   * advancement.
+   */
+  private authHeaders(): Promise<Record<string, string>> {
+    return buildAuthHeaders(this.auth);
   }
 
   // --- The Fleet Routine ---
@@ -237,7 +255,7 @@ export class FleetRoutineClient {
 
     const response = await this.fetchFn(
       `${this.baseUrl}/v1/me/work?after=${encodeURIComponent(after)}`,
-      { method: "GET", headers: this.authHeaders },
+      { method: "GET", headers: await this.authHeaders() },
     );
 
     await this.throwIfError(response, "reconcile_failed", "GET /v1/me/work returned");
@@ -373,7 +391,7 @@ export class FleetRoutineClient {
     const cursor = after ?? (await this.cursorStore.read()) ?? "0";
     const response = await this.fetchFn(
       `${this.baseUrl}/v1/activity?after=${encodeURIComponent(cursor)}`,
-      { method: "GET", headers: this.authHeaders },
+      { method: "GET", headers: await this.authHeaders() },
     );
 
     await this.throwIfError(response, "request_failed", "GET /v1/activity returned");
@@ -399,7 +417,7 @@ export class FleetRoutineClient {
   async getDecisions(): Promise<DecisionRequest[]> {
     const response = await this.fetchFn(
       `${this.baseUrl}/v1/decisions`,
-      { method: "GET", headers: this.authHeaders },
+      { method: "GET", headers: await this.authHeaders() },
     );
     const envelope = await this.parseJson<{ decisions: DecisionRequest[] }>(response);
     return envelope.decisions;
@@ -444,7 +462,7 @@ export class FleetRoutineClient {
     idempotencyKey: string,
   ): Promise<T> {
     const headers: Record<string, string> = {
-      ...this.authHeaders,
+      ...(await this.authHeaders()),
       "Content-Type": "application/json",
       "Idempotency-Key": idempotencyKey,
     };

@@ -5,103 +5,95 @@
  * the Fleet Worker derives the actor from the verified Cloudflare Access JWT
  * (`common_name` for service principals — see
  * docs/onboarding/cloudflare-access.md and workslo/fleet#31), so the client
- * never sends an actor identity of any kind.
+ * never sends an actor identity of any kind. The caller selects the auth mode
+ * explicitly; there is no default.
  *
- * Secret boundary (brief, Sep 7 2026): credentials live in the agent's
- * approved secret store. Nothing here logs, persists, or emits them outside
- * the auth headers; error paths redact values by construction (they are never
- * read into the error).
+ * Secret boundary (coordination ack, Sep 7 2026): credential acquisition stays
+ * OUTSIDE this portable module. The caller injects a request-time credential
+ * provider — typically one that reads the runtime's approved secret store.
+ * Nothing here reads process.env, logs, persists, or emits credential values
+ * outside the auth headers; provider errors carry no credential material by
+ * construction (values are never placed into error messages).
  *
- * Single-header fallback shape follows the onboarding contract ("one
- * configured header containing the credential pair as JSON"); the exact key
- * names are confirmed against the configured Access application at the
- * live-probe gate — local fixtures assert JSON-ness, not Cloudflare's wire
- * contract.
+ * Verified-transport caveat (preserved from the original proposal, Sep 7):
+ * this module emits Cloudflare's documented two-header Access service-credential
+ * shape (CF-Access-Client-Id / CF-Access-Client-Secret). That the runtime's
+ * vault/proxy actually delivers these exact headers is UNVERIFIED until the
+ * live probe against the configured Access application. Fixtures assert this
+ * module's output shape, not Cloudflare's wire contract.
  */
 
 // ---------------------------------------------------------------------------
-// Credential source — where the pair comes from. Never a literal in prod.
+// Credential provider — injected by the caller, invoked at request time.
 // ---------------------------------------------------------------------------
 
-export type AccessCredentialSource =
-  /** Explicit values. Intended for tests and callers that already hold the
-   *  pair in their own secret plumbing. Never commit real values. */
-  | { source: "explicit"; clientId: string; clientSecret: string }
-  /** Read from the environment at REQUEST time (not construction), so
-   *  late-arriving proxy injection is picked up. Defaults:
-   *  CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET. This is the
-   *  native-proxy-injection path — values stay outside model plaintext. */
-  | { source: "env"; clientIdVar?: string; clientSecretVar?: string };
-
-// ---------------------------------------------------------------------------
-// Auth modes — exactly one; the client has no default.
-// ---------------------------------------------------------------------------
-
-export type ReferenceClientAuth =
-  /** Both documented headers: CF-Access-Client-Id + CF-Access-Client-Secret. */
-  | { mode: "access-pair"; credential: AccessCredentialSource }
-  /** Documented fallback: one configured header carrying the pair as JSON. */
-  | { mode: "access-single-header"; headerName: string; credential: AccessCredentialSource }
-  /** Proxy-managed transport: the client sends NO auth headers; an external
-   *  layer injects them. Credentials never reach the client process. */
-  | { mode: "external" };
-
-const ENV_CLIENT_ID = "CF_ACCESS_CLIENT_ID";
-const ENV_CLIENT_SECRET = "CF_ACCESS_CLIENT_SECRET";
-
-/** Thrown when a credential source cannot produce the pair. Carries only the
- *  variable NAME — never any value. */
-export class MissingCredentialError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "MissingCredentialError";
-  }
-}
-
-interface ResolvedPair {
+/** The Access service-credential pair. Callers obtain it from their own
+ *  approved secret plumbing — never a literal in committed code. */
+export interface AccessCredentialPair {
   clientId: string;
   clientSecret: string;
 }
 
-function resolvePair(credential: AccessCredentialSource): ResolvedPair {
-  if (credential.source === "explicit") {
-    return { clientId: credential.clientId, clientSecret: credential.clientSecret };
+/**
+ * Request-time credential provider. Invoked once per request, immediately
+ * before the network call — so late-arriving credentials (proxy injection,
+ * vault refresh) are picked up without reconstructing the client. May be
+ * synchronous or async.
+ */
+export type AccessCredentialProvider = () =>
+  | AccessCredentialPair
+  | Promise<AccessCredentialPair>;
+
+/** Thrown when the injected credential provider fails or returns an
+ *  incomplete pair. Carries only the failure description — never any
+ *  credential value. */
+export class CredentialProviderError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CredentialProviderError";
   }
-  const idVar = credential.clientIdVar ?? ENV_CLIENT_ID;
-  const secretVar = credential.clientSecretVar ?? ENV_CLIENT_SECRET;
-  const env = typeof process !== "undefined" ? process.env : {};
-  const clientId = env[idVar];
-  const clientSecret = env[secretVar];
-  if (!clientId || !clientSecret) {
-    const missing = [
-      ...(clientId ? [] : [idVar]),
-      ...(clientSecret ? [] : [secretVar]),
-    ].join(", ");
-    throw new MissingCredentialError(
-      `Access service credential not available: unset env var(s) ${missing}`,
-    );
-  }
-  return { clientId, clientSecret };
 }
 
+// ---------------------------------------------------------------------------
+// Auth modes — exactly one, chosen explicitly by the caller; no default.
+// ---------------------------------------------------------------------------
+
+export type ReferenceClientAuth =
+  /** Both documented Access headers, sourced from the injected provider. */
+  | { mode: "access-pair"; getCredentials: AccessCredentialProvider }
+  /** Proxy-managed transport: the client sends NO auth headers; an external
+   *  layer injects them. Credentials never reach the client process. The
+   *  choice is still explicit — the client sends no caller-identity header
+   *  and has no default transport. */
+  | { mode: "external" };
+
 /**
- * Build the auth headers for a request. Reads env-based credentials at
- * request time. Returned headers are exactly the auth headers — the client
- * merges them with its identity/idempotency/version headers, which are
- * unchanged by this module.
+ * Build the auth headers for a request. The provider is invoked here — at
+ * request time, before the network call — so a provider failure surfaces
+ * before any network activity or cursor advancement.
+ *
+ * Returned headers are exactly the auth headers; the client merges them with
+ * its Idempotency-Key / If-Match / Content-Type headers, which are unchanged
+ * by this module.
  */
-export function buildAuthHeaders(auth: ReferenceClientAuth): Record<string, string> {
+export async function buildAuthHeaders(
+  auth: ReferenceClientAuth,
+): Promise<Record<string, string>> {
   if (auth.mode === "external") {
     return {};
   }
-  const pair = resolvePair(auth.credential);
-  if (auth.mode === "access-single-header") {
-    return {
-      [auth.headerName]: JSON.stringify({
-        client_id: pair.clientId,
-        client_secret: pair.clientSecret,
-      }),
-    };
+  let pair: AccessCredentialPair;
+  try {
+    pair = await auth.getCredentials();
+  } catch (err) {
+    throw new CredentialProviderError(
+      `Access credential provider failed before request: ${err instanceof Error ? err.name : "unknown error"}`,
+    );
+  }
+  if (!pair || typeof pair.clientId !== "string" || typeof pair.clientSecret !== "string" || !pair.clientId || !pair.clientSecret) {
+    throw new CredentialProviderError(
+      "Access credential provider returned an incomplete pair (both clientId and clientSecret are required)",
+    );
   }
   return {
     "CF-Access-Client-Id": pair.clientId,

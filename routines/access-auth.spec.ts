@@ -1,96 +1,112 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildAuthHeaders,
-  MissingCredentialError,
+  CredentialProviderError,
   type ReferenceClientAuth,
 } from "./access-auth";
 
-const ENV_PAIR = {
-  CF_ACCESS_CLIENT_ID: "probe.access.example.local",
-  CF_ACCESS_CLIENT_SECRET: "fixture-secret-not-a-real-credential",
+// Fixture credentials — not real secrets. Values are deliberately distinctive
+// so redaction assertions can prove they never reach error messages.
+const FIXTURE_PAIR = {
+  clientId: "fixture.access-id.local",
+  clientSecret: "fixture-secret-not-a-real-credential",
 };
 
-function withEnv(run: () => void): void {
-  const saved = { ...process.env };
-  Object.assign(process.env, ENV_PAIR);
-  try {
-    run();
-  } finally {
-    process.env = saved;
-  }
+function pairAuth(
+  getCredentials?: ReferenceClientAuth extends never ? never : () => unknown,
+): ReferenceClientAuth {
+  return {
+    mode: "access-pair",
+    getCredentials:
+      getCredentials ??
+      (() => ({ ...FIXTURE_PAIR })),
+  } as ReferenceClientAuth;
 }
 
-describe("buildAuthHeaders", () => {
-  afterEach(() => {
-    delete process.env.CF_ACCESS_CLIENT_ID;
-    delete process.env.CF_ACCESS_CLIENT_SECRET;
-  });
-
-  it("pair mode with explicit source sends both documented Access headers", () => {
-    const headers = buildAuthHeaders({
-      mode: "access-pair",
-      credential: { source: "explicit", clientId: "id-1", clientSecret: "s-1" },
-    });
+describe("buildAuthHeaders — access-pair mode", () => {
+  it("sends both documented Access headers with the provider's pair", async () => {
+    const headers = await buildAuthHeaders(pairAuth());
     expect(headers).toEqual({
-      "CF-Access-Client-Id": "id-1",
-      "CF-Access-Client-Secret": "s-1",
+      "CF-Access-Client-Id": FIXTURE_PAIR.clientId,
+      "CF-Access-Client-Secret": FIXTURE_PAIR.clientSecret,
     });
   });
 
-  it("pair mode with env source reads at request time, not construction", () => {
-    const auth: ReferenceClientAuth = { mode: "access-pair", credential: { source: "env" } };
-    expect(() => buildAuthHeaders(auth)).toThrow(MissingCredentialError);
-    withEnv(() => {
-      const headers = buildAuthHeaders(auth);
-      expect(headers["CF-Access-Client-Id"]).toBe(ENV_PAIR.CF_ACCESS_CLIENT_ID);
-      expect(headers["CF-Access-Client-Secret"]).toBe(ENV_PAIR.CF_ACCESS_CLIENT_SECRET);
-    });
+  it("invokes the provider at request time, not construction", async () => {
+    const getCredentials = vi.fn(() => ({ ...FIXTURE_PAIR }));
+    const auth: ReferenceClientAuth = { mode: "access-pair", getCredentials };
+    expect(getCredentials).not.toHaveBeenCalled();
+
+    await buildAuthHeaders(auth);
+    await buildAuthHeaders(auth);
+
+    expect(getCredentials).toHaveBeenCalledTimes(2);
   });
 
-  it("missing env fails loud with variable NAMES only — no values in the error", () => {
-    const secret = ENV_PAIR.CF_ACCESS_CLIENT_SECRET;
-    process.env.CF_ACCESS_CLIENT_SECRET = secret;
-    try {
-      expect(() =>
-        buildAuthHeaders({ mode: "access-pair", credential: { source: "env" } }),
-      ).toThrow(/CF_ACCESS_CLIENT_ID/);
-    } finally {
-      delete process.env.CF_ACCESS_CLIENT_SECRET;
-    }
-    // Redaction by construction: nothing in this module ever places the value
-    // in an error; assert the thrown error mentions neither value.
-    let message = "";
-    try {
-      buildAuthHeaders({ mode: "access-pair", credential: { source: "env" } });
-    } catch (e) {
-      message = (e as Error).message;
-    }
-    expect(message).not.toContain(secret);
-    expect(message).not.toContain(ENV_PAIR.CF_ACCESS_CLIENT_ID);
+  it("supports async providers (secret-store reads)", async () => {
+    const headers = await buildAuthHeaders(
+      pairAuth(async () => ({ ...FIXTURE_PAIR })),
+    );
+    expect(headers["CF-Access-Client-Id"]).toBe(FIXTURE_PAIR.clientId);
   });
 
-  it("single-header mode emits one configured header carrying the pair as JSON", () => {
-    const headers = buildAuthHeaders({
-      mode: "access-single-header",
-      headerName: "X-Fleet-Access-Credential",
-      credential: { source: "explicit", clientId: "id-2", clientSecret: "s-2" },
-    });
-    expect(Object.keys(headers)).toEqual(["X-Fleet-Access-Credential"]);
-    const parsed = JSON.parse(headers["X-Fleet-Access-Credential"]) as Record<string, string>;
-    expect(parsed).toEqual({ client_id: "id-2", client_secret: "s-2" });
+  it("omits no caller-identity header — actor is never caller-supplied", async () => {
+    const headers = await buildAuthHeaders(pairAuth());
+    expect("X-Fleet-Principal" in headers).toBe(false);
+  });
+});
+
+describe("buildAuthHeaders — external mode", () => {
+  it("sends no auth headers at all", async () => {
+    const headers = await buildAuthHeaders({ mode: "external" });
+    expect(headers).toEqual({});
   });
 
-  it("external mode sends no auth headers at all", () => {
-    withEnv(() => {
-      expect(buildAuthHeaders({ mode: "external" })).toEqual({});
+  it("sends no caller-identity header either", async () => {
+    const headers = await buildAuthHeaders({ mode: "external" });
+    expect("X-Fleet-Principal" in headers).toBe(false);
+    expect("CF-Access-Client-Id" in headers).toBe(false);
+    expect("CF-Access-Client-Secret" in headers).toBe(false);
+  });
+});
+
+describe("buildAuthHeaders — failure paths fail loud, without secret material", () => {
+  it("wraps provider failure in CredentialProviderError", async () => {
+    const auth = pairAuth(() => {
+      throw new Error("vault unavailable");
     });
+    await expect(buildAuthHeaders(auth)).rejects.toThrow(CredentialProviderError);
   });
 
-  it("external mode sends no identity header even when env pair is present", () => {
-    withEnv(() => {
-      const headers = buildAuthHeaders({ mode: "external" });
-      expect("CF-Access-Client-Id" in headers).toBe(false);
-      expect("X-Fleet-Principal" in headers).toBe(false);
+  it("provider failure message carries no credential values", async () => {
+    const auth = pairAuth(() => {
+      throw new Error(
+        `vault unavailable for ${FIXTURE_PAIR.clientSecret}`,
+      );
     });
+    const err = await buildAuthHeaders(auth).catch((e: Error) => e);
+    // The underlying provider error is wrapped by NAME, not message — the
+    // original message (which in a real fault could carry secret material)
+    // never reaches the thrown error.
+    expect(err.message).not.toContain(FIXTURE_PAIR.clientSecret);
+    expect(err.message).not.toContain(FIXTURE_PAIR.clientId);
+    expect(err.message).toContain("Error");
+  });
+
+  it("incomplete provider pair fails loud", async () => {
+    const missingSecret = pairAuth(() =>
+      ({ clientId: FIXTURE_PAIR.clientId }) as unknown as {
+        clientId: string;
+        clientSecret: string;
+      },
+    );
+    await expect(buildAuthHeaders(missingSecret)).rejects.toThrow(
+      /incomplete pair/,
+    );
+  });
+
+  it("empty-string pair values fail loud", async () => {
+    const empty = pairAuth(() => ({ clientId: "", clientSecret: "" }));
+    await expect(buildAuthHeaders(empty)).rejects.toThrow(CredentialProviderError);
   });
 });
