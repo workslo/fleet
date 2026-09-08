@@ -419,7 +419,7 @@ export class FleetRoutineClient {
   async getRequest(requestId: string): Promise<WorkRequestSummary> {
     const response = await this.fetchFn(
       `${this.baseUrl}/v1/requests/${encodeURIComponent(requestId)}`,
-      { method: "GET", headers: this.authHeaders },
+      { method: "GET", headers: await this.authHeaders() },
     );
     return this.parseJson<WorkRequestSummary>(response);
   }
