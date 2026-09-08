@@ -7,6 +7,7 @@ import {
   FleetRoutineError,
   AgentWorkSnapshot,
 } from "./reference-client";
+import { CredentialProviderError, type ReferenceClientAuth } from "./access-auth";
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -72,17 +73,20 @@ function emptySnapshot(cursor = "0"): AgentWorkSnapshot {
 function makeClient(
   fetchFn: FetchLike,
   cursorStore: CursorStore,
-  opts?: { authHeader?: string },
+  auth?: ReferenceClientAuth,
 ): FleetRoutineClient {
   const clientOpts: FleetRoutineClientOptions = {
     baseUrl: "https://fleet.test",
-    principal: "juniorslo",
     cursorStore,
     fetchFn,
+    auth: auth ?? {
+      mode: "access-pair",
+      getCredentials: () => ({
+        clientId: "fixture.access-id.local",
+        clientSecret: "fixture-secret-not-a-real-credential",
+      }),
+    },
   };
-  if (opts?.authHeader !== undefined) {
-    clientOpts.authHeader = opts.authHeader;
-  }
   return new FleetRoutineClient(clientOpts);
 }
 
@@ -249,10 +253,14 @@ describe("FleetRoutineClient — reconcile (the Fleet Routine)", () => {
     expect(store.stored).toBe("42");
   });
 
-  it("sends the principal in the auth header", async () => {
+  it("sends both exact Access headers from the injected provider (pair mode)", async () => {
     const store = makeCursorStore();
     const fetchFn = makeFetch((_url, init) => {
-      expect(init?.headers?.["X-Fleet-Principal"]).toBe("juniorslo");
+      expect(init?.headers?.["CF-Access-Client-Id"]).toBe("fixture.access-id.local");
+      expect(init?.headers?.["CF-Access-Client-Secret"]).toBe(
+        "fixture-secret-not-a-real-credential",
+      );
+      expect("X-Fleet-Principal" in (init?.headers ?? {})).toBe(false);
       return { status: 200, body: emptySnapshot("1") };
     });
     const client = makeClient(fetchFn, store);
@@ -260,15 +268,85 @@ describe("FleetRoutineClient — reconcile (the Fleet Routine)", () => {
     await client.reconcile();
   });
 
-  it("supports a custom auth header name", async () => {
+  it("sends NO auth headers in external mode — the proxy injects them", async () => {
     const store = makeCursorStore();
     const fetchFn = makeFetch((_url, init) => {
-      expect(init?.headers?.["Authorization"]).toBe("juniorslo");
+      const headers = init?.headers ?? {};
+      expect("CF-Access-Client-Id" in headers).toBe(false);
+      expect("CF-Access-Client-Secret" in headers).toBe(false);
+      expect("X-Fleet-Principal" in headers).toBe(false);
       return { status: 200, body: emptySnapshot("1") };
     });
-    const client = makeClient(fetchFn, store, { authHeader: "Authorization" });
+    const client = makeClient(fetchFn, store, { mode: "external" });
 
     await client.reconcile();
+  });
+
+  it("fails BEFORE any network call or cursor write when the provider fails", async () => {
+    const store = makeCursorStore();
+    store.stored = "42";
+    const fetchFn = vi.fn(() => {
+      throw new Error("network must not be reached");
+    }) as unknown as FetchLike;
+    const client = makeClient(fetchFn, store, {
+      mode: "access-pair",
+      getCredentials: () => {
+        throw new Error("vault unavailable");
+      },
+    });
+
+    await expect(client.reconcile()).rejects.toThrow(CredentialProviderError);
+
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(store.stored).toBe("42");
+  });
+
+  it("does NOT advance the cursor on auth denial (401)", async () => {
+    const store = makeCursorStore();
+    store.stored = "42";
+    const fetchFn = makeFetch(() => ({
+      status: 401,
+      body: { error: "unauthorized", message: "Access denied" },
+    }));
+    const client = makeClient(fetchFn, store);
+
+    await expect(client.reconcile()).rejects.toThrow(FleetRoutineError);
+
+    expect(store.stored).toBe("42");
+  });
+
+  it("keeps Idempotency-Key and If-Match alongside the auth headers on mutations", async () => {
+    const store = makeCursorStore();
+    const seen: Array<Record<string, string>> = [];
+    const fetchFn = makeFetch((_url, init) => {
+      seen.push(init?.headers ?? {});
+      return {
+        status: 200,
+        body: {
+          id: "req-1",
+          project_id: "proj-1",
+          requester: { id: "codex" },
+          recipient: { id: "juniorslo" },
+          title: "Build client",
+          detail: "Build it",
+          state: "Accepted",
+          version: 4,
+          accepted_at: "2026-08-31T01:00:00Z",
+          fulfilled_at: null,
+          created_at: "2026-08-31T00:00:00Z",
+          updated_at: "2026-08-31T01:00:00Z",
+        },
+      };
+    });
+    const client = makeClient(fetchFn, store);
+
+    await client.acceptRequest("req-1", 3, "key-123");
+
+    const headers = seen[0] ?? {};
+    // Auth headers and retry-safety headers coexist — neither clobbers the other.
+    expect(headers["CF-Access-Client-Id"]).toBe("fixture.access-id.local");
+    expect(headers["Idempotency-Key"]).toBe("key-123");
+    expect(headers["If-Match"]).toBe('"3"');
   });
 });
 
