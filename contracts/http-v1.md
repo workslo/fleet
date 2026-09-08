@@ -17,7 +17,9 @@ All errors have this shape:
 | `POST /v1/projects/:id/authorize` | Shane authorizes with `proposed_owner_id`, `outcome`, `scope`, `exclusions`, `delegated_actions`, `gates`, `validation_evidence`, and `plan`. |
 | `POST /v1/projects/:id/owner-accept` | The proposed owner accepts with `{}`. |
 | `GET /v1/projects/:id` | Read one project card. |
-| `POST /v1/projects/:id/requests` | Create a `Pending` Work Request with `recipient_id`, `title`, and `detail`. |
+| `POST /v1/projects/:id/requests` | Create a `Pending` Work Request with non-blank `recipient_id`, `title`, and `detail`; `project_id` comes only from the route and caller-identity fields are rejected. |
+| `POST /v1/requests` | Create a `Pending` Work Request with `recipient_id`, `title`, `detail`, optional `artifact: { uri, summary }`, and optional `project_id`; omission or `null` makes it standalone. |
+| `GET /v1/requests/:id` | Read one Work Request, its frozen `accepted_scope`, and fulfillment `evidence`. |
 | `POST /v1/requests/:id/accept` | The recipient accepts with `{}` and a quoted request `If-Match` version. |
 | `POST /v1/requests/:id/fulfill` | The recipient fulfills with optional `evidence: [{ uri, summary }]` and a quoted request `If-Match` version. |
 | `POST /v1/pull-candidates` | Publish a Pull Candidate with `project_id`, `title`, and `detail`. |
@@ -63,6 +65,22 @@ provenance.
 Request acceptance and fulfillment use the same idempotency behavior. Their
 `If-Match: "<version>"` refers to the Work Request's current version.
 
+Request titles, details, recipient IDs, artifact metadata, and fulfillment
+evidence metadata must be non-blank. Artifact and evidence URIs must be absolute
+HTTP or HTTPS URLs. Caller identity is always server-resolved; mutation bodies
+that supply `requester_id`, `actor_id`, or `agent_id` are rejected.
+
+Acceptance snapshots the current request title, detail, and artifact link into
+`accepted_scope`; later reads do not reconstruct what the recipient accepted.
+Only the recipient may accept or fulfill. Project-linked requests continue to
+require an Active project; standalone requests return `project_id: null` and
+create no Fleet Project.
+
+`GET /v1/requests/:id` exposes fulfillment Evidence as
+`evidence: [{ uri, summary, created_at }]`. Work snapshots remain summaries;
+clients use the request route when they need evidence detail. An artifact link
+is deliberately shared metadata; Fleet does not copy the artifact contents.
+
 New activity entries include a `principal` object alongside `actor`, preserving
 which enrolled human or service identity authenticated the mutation. Activity
 created before principal provenance was added may return `principal: null`.
@@ -74,7 +92,7 @@ created before principal provenance was added may return `principal: null`.
 ```json
 {
   "obligations": [
-    { "source": "accepted_request", "request_id": "uuid", "project_id": "uuid" },
+    { "source": "accepted_request", "request_id": "uuid", "project_id": null },
     { "source": "owner_next_action", "project_id": "uuid" }
   ],
   "outbound_requests": [],
@@ -84,6 +102,12 @@ created before principal provenance was added may return `principal: null`.
   "next_cursor": "42"
 }
 ```
+
+The `project_id` of an accepted-request obligation is nullable for standalone
+work. Pending standalone requests appear in the same inbound/outbound arrays as
+project-linked requests, so Board and Routine clients reconcile one state.
+Activity for standalone work carries `project_id: null` and a non-null
+`request_id`; each activity row must be anchored to a project or request.
 
 The `after` cursor is the last observed integer `activity_events.id`, encoded
 as an opaque decimal string. When it is absent, it means `0`. Each activity

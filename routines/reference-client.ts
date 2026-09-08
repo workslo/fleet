@@ -32,8 +32,10 @@ export type WorkRequestState =
   | "Pending"
   | "Accepted"
   | "Fulfilled"
+  | "Returned"
   | "Declined"
-  | "Withdrawn";
+  | "Withdrawn"
+  | "Expired";
 
 export interface ActorRef {
   id: string;
@@ -42,16 +44,33 @@ export interface ActorRef {
 export interface Obligation {
   source: "accepted_request" | "owner_next_action";
   request_id?: string;
-  project_id: string;
+  project_id: string | null;
+}
+
+export interface EvidenceLink {
+  uri: string;
+  summary: string;
+  created_at?: string;
+}
+
+export type ArtifactLink = EvidenceLink;
+
+export interface AcceptedRequestScope {
+  title: string;
+  detail: string;
+  artifact: ArtifactLink | null;
 }
 
 export interface WorkRequestSummary {
   id: string;
-  project_id: string;
+  project_id: string | null;
   requester: ActorRef;
   recipient: ActorRef;
   title: string;
   detail: string;
+  artifact?: ArtifactLink | null;
+  accepted_scope?: AcceptedRequestScope | null;
+  evidence?: EvidenceLink[];
   state: WorkRequestState;
   version: number;
   accepted_at: string | null;
@@ -74,6 +93,7 @@ export interface ActivityEvent {
   type: string;
   actor: ActorRef;
   project_id: string | null;
+  request_id?: string | null;
   created_at: string;
 }
 
@@ -332,6 +352,27 @@ export class FleetRoutineClient {
   }
 
   /**
+   * Create a bounded Work Request without a Fleet Project. The caller shares
+   * only the supplied artifact link; personal-work contents remain in place.
+   */
+  async createStandaloneRequest(
+    recipientId: string,
+    title: string,
+    detail: string,
+    idempotencyKey: string,
+    artifact?: ArtifactLink,
+  ): Promise<WorkRequestSummary> {
+    const body: Record<string, unknown> = { recipient_id: recipientId, title, detail };
+    if (artifact !== undefined) body.artifact = artifact;
+    return this.mutate<WorkRequestSummary>(
+      "/v1/requests",
+      undefined,
+      body,
+      idempotencyKey,
+    );
+  }
+
+  /**
    * Publish a Pull Candidate. Pull Candidates are voluntary and never create
    * an obligation, claim, or priority.
    *
@@ -355,6 +396,15 @@ export class FleetRoutineClient {
   }
 
   // --- Read endpoints ---
+
+  /** Read one request, including its frozen accepted scope and evidence. */
+  async getRequest(requestId: string): Promise<WorkRequestSummary> {
+    const response = await this.fetchFn(
+      `${this.baseUrl}/v1/requests/${encodeURIComponent(requestId)}`,
+      { method: "GET", headers: this.authHeaders },
+    );
+    return this.parseJson<WorkRequestSummary>(response);
+  }
 
   /**
    * Read activity events after the supplied cursor.

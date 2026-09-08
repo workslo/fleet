@@ -11,17 +11,40 @@ type IdempotencyRecord = {
 };
 
 type EvidenceInput = { uri: string; summary: string };
-type RequestInput = { recipient_id: string; title: string; detail: string };
+type EvidenceRow = EvidenceInput & { created_at: string };
+type ArtifactInput = { uri: string; summary: string };
+type RequestInput = { project_id?: string | null; recipient_id: string; title: string; detail: string; artifact?: ArtifactInput };
 type PullCandidateInput = { project_id: string; title: string; detail: string };
 
 function object(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+function httpUri(value: unknown): value is string {
+  if (typeof value !== "string" || value.trim().length === 0) return false;
+  try {
+    const protocol = new URL(value).protocol;
+    return protocol === "http:" || protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 function requestInput(value: unknown): RequestInput | null {
   if (!object(value)) return null;
+  if ("requester_id" in value || "actor_id" in value || "agent_id" in value) return null;
   const input = value as Partial<RequestInput>;
-  return typeof input.recipient_id === "string" && typeof input.title === "string" && typeof input.detail === "string" ? input as RequestInput : null;
+  const artifact = input.artifact;
+  const validArtifact = artifact === undefined || (
+    object(artifact) && httpUri(artifact.uri) &&
+    typeof artifact.summary === "string" && artifact.summary.trim().length > 0
+  );
+  const validProject = input.project_id === undefined || input.project_id === null || (typeof input.project_id === "string" && input.project_id.trim().length > 0);
+  return validProject && typeof input.recipient_id === "string" && input.recipient_id.trim().length > 0 &&
+    typeof input.title === "string" && input.title.trim().length > 0 &&
+    typeof input.detail === "string" && input.detail.trim().length > 0 && validArtifact
+    ? input as RequestInput
+    : null;
 }
 
 function pullCandidateInput(value: unknown): PullCandidateInput | null {
@@ -37,7 +60,9 @@ function fulfillmentEvidence(value: unknown): EvidenceInput[] | null {
   // malformed shape like any other and must fail validation.
   if (raw !== undefined && !Array.isArray(raw)) return null;
   const evidence = raw ?? [];
-  return evidence.every((entry) => object(entry) && typeof entry.uri === "string" && typeof entry.summary === "string")
+  return evidence.every((entry) => object(entry) &&
+    httpUri(entry.uri) &&
+    typeof entry.summary === "string" && entry.summary.trim().length > 0)
     ? evidence as EvidenceInput[]
     : null;
 }
@@ -89,14 +114,28 @@ async function activeProject(env: Env, projectId: string): Promise<boolean> {
   return Boolean(row);
 }
 
-function requestResponse(row: WorkRequestRow) {
-  return {
+function artifact(row: WorkRequestRow): ArtifactInput | null {
+  return row.artifact_uri && row.artifact_summary
+    ? { uri: row.artifact_uri, summary: row.artifact_summary }
+    : null;
+}
+
+function acceptedScope(row: WorkRequestRow): { title: string; detail: string; artifact: ArtifactInput | null } | null {
+  return row.accepted_scope_json
+    ? JSON.parse(row.accepted_scope_json) as { title: string; detail: string; artifact: ArtifactInput | null }
+    : null;
+}
+
+function requestResponse(row: WorkRequestRow, evidence?: EvidenceRow[]) {
+  const response = {
     id: row.id,
     project_id: row.project_id,
     requester: { id: row.requester_id },
     recipient: { id: row.recipient_id },
     title: row.title,
     detail: row.detail,
+    artifact: artifact(row),
+    accepted_scope: acceptedScope(row),
     state: row.state,
     version: row.version,
     accepted_at: row.accepted_at,
@@ -104,36 +143,52 @@ function requestResponse(row: WorkRequestRow) {
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
+  return evidence === undefined ? response : { ...response, evidence };
 }
 
 async function workRequest(env: Env, requestId: string): Promise<WorkRequestRow | null> {
   return env.DB.prepare("SELECT * FROM work_requests WHERE id = ?").bind(requestId).first<WorkRequestRow>();
 }
 
-export async function createRequest(request: Request, env: Env, caller: Actor, projectId: string): Promise<Response> {
+async function requestEvidence(env: Env, requestId: string): Promise<EvidenceRow[]> {
+  const result = await env.DB.prepare(
+    "SELECT uri, summary, created_at FROM evidence_links WHERE request_id = ? ORDER BY id ASC",
+  ).bind(requestId).all<EvidenceRow>();
+  return result.results;
+}
+
+export async function getRequest(env: Env, requestId: string): Promise<Response> {
+  const row = await workRequest(env, requestId);
+  return row ? json(requestResponse(row, await requestEvidence(env, requestId))) : error("not_found", "work request does not exist", 404);
+}
+
+export async function createRequest(request: Request, env: Env, caller: Actor, routeProjectId?: string): Promise<Response> {
   const body = await requestJson(request);
   if (isResponse(body)) return body;
   const input = requestInput(body);
-  if (!input) return error("invalid_request", "recipient_id, title, and detail are required", 400);
-  if (!await activeProject(env, projectId)) return error("conflict", "work requests require an active project", 409);
-  if (!await activeActor(env, input.recipient_id)) return error("invalid_request", "recipient_id must be an active actor", 400);
+  if (!input) return error("invalid_request", "project_id is optional; recipient_id, title, and detail are required; caller identity fields are forbidden", 400);
+  if (routeProjectId !== undefined && input.project_id !== undefined) return error("invalid_request", "project_id is supplied by the project-scoped route", 400);
+  const projectId = routeProjectId ?? input.project_id ?? null;
   const idempotency = await priorReplay(env, caller, request, body);
   if (isResponse(idempotency)) return idempotency;
+  if (projectId !== null && !await activeProject(env, projectId)) return error("conflict", "project-linked work requests require an active project", 409);
+  if (!await activeActor(env, input.recipient_id)) return error("invalid_request", "recipient_id must be an active actor", 400);
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
   const stored: WorkRequestRow = {
     id, project_id: projectId, requester_id: caller.id, recipient_id: input.recipient_id, title: input.title, detail: input.detail,
+    artifact_uri: input.artifact?.uri ?? null, artifact_summary: input.artifact?.summary ?? null, accepted_scope_json: null,
     state: "Pending", version: 1, accepted_at: null, fulfilled_at: null, created_at: now, updated_at: now,
   };
   const responseBody = JSON.stringify(requestResponse(stored));
   try {
     await env.DB.batch([
-      env.DB.prepare("INSERT INTO work_requests (id, project_id, requester_id, recipient_id, title, detail, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").bind(id, projectId, caller.id, input.recipient_id, input.title, input.detail, now, now),
+      env.DB.prepare("INSERT INTO work_requests (id, project_id, requester_id, recipient_id, title, detail, artifact_uri, artifact_summary, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(id, projectId, caller.id, input.recipient_id, input.title, input.detail, input.artifact?.uri ?? null, input.artifact?.summary ?? null, now, now),
       env.DB.prepare(
         `INSERT INTO activity_events
-          (project_id, actor_id, principal_provider, principal_issuer, principal_kind, principal_subject, type, payload_json, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, 'work_request.created', ?, ?)`,
-      ).bind(projectId, caller.id, ...principalValues(caller), JSON.stringify({ request_id: id, recipient_id: input.recipient_id }), now),
+          (project_id, request_id, actor_id, principal_provider, principal_issuer, principal_kind, principal_subject, type, payload_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'work_request.created', ?, ?)`,
+      ).bind(projectId, id, caller.id, ...principalValues(caller), JSON.stringify({ request_id: id, recipient_id: input.recipient_id }), now),
       idempotencyStatement(env, caller, request, idempotency, 201, responseBody),
     ]);
   } catch {
@@ -157,22 +212,23 @@ export async function acceptRequest(request: Request, env: Env, caller: Actor, r
   if (current.version !== version) return error("precondition_failed", "work request version is stale", 412);
   if (current.state !== "Pending") return error("conflict", "work request is not pending", 409);
   const now = new Date().toISOString();
-  const responseBody = JSON.stringify(requestResponse({ ...current, state: "Accepted", version: version + 1, accepted_at: now, updated_at: now }));
+  const acceptedScopeJson = JSON.stringify({ title: current.title, detail: current.detail, artifact: artifact(current) });
+  const responseBody = JSON.stringify(requestResponse({ ...current, accepted_scope_json: acceptedScopeJson, state: "Accepted", version: version + 1, accepted_at: now, updated_at: now }));
   let transition: D1Result<unknown> | undefined;
   let replay: D1Result<unknown> | undefined;
   try {
     const results = await env.DB.batch([
       env.DB.prepare(
         `INSERT INTO activity_events
-          (project_id, actor_id, principal_provider, principal_issuer, principal_kind, principal_subject, type, payload_json, created_at)
-         SELECT project_id, ?, ?, ?, ?, ?, 'work_request.accepted', ?, ?
+          (project_id, request_id, actor_id, principal_provider, principal_issuer, principal_kind, principal_subject, type, payload_json, created_at)
+         SELECT project_id, id, ?, ?, ?, ?, ?, 'work_request.accepted', ?, ?
            FROM work_requests
           WHERE id = ? AND recipient_id = ? AND version = ? AND state = 'Pending'`,
       ).bind(caller.id, ...principalValues(caller), JSON.stringify({ request_id: requestId }), now, requestId, caller.id, version),
       env.DB.prepare(
         "INSERT INTO idempotency_records (actor_id, idempotency_key, method, path, request_hash, response_status, response_body) SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM work_requests WHERE id = ? AND recipient_id = ? AND version = ? AND state = 'Pending')",
       ).bind(caller.id, idempotency.key, request.method, new URL(request.url).pathname, idempotency.hash, 200, responseBody, requestId, caller.id, version),
-      env.DB.prepare("UPDATE work_requests SET state = 'Accepted', accepted_at = ?, version = version + 1, updated_at = ? WHERE id = ? AND recipient_id = ? AND version = ? AND state = 'Pending'").bind(now, now, requestId, caller.id, version),
+      env.DB.prepare("UPDATE work_requests SET state = 'Accepted', accepted_scope_json = ?, accepted_at = ?, version = version + 1, updated_at = ? WHERE id = ? AND recipient_id = ? AND version = ? AND state = 'Pending'").bind(acceptedScopeJson, now, now, requestId, caller.id, version),
     ]);
     transition = results[2];
     replay = results[1];
@@ -210,8 +266,8 @@ export async function fulfillRequest(request: Request, env: Env, caller: Actor, 
       ...evidence.map((entry) => env.DB.prepare("INSERT INTO evidence_links (project_id, request_id, actor_id, uri, summary, created_at) SELECT project_id, id, ?, ?, ?, ? FROM work_requests WHERE id = ? AND recipient_id = ? AND version = ? AND state = 'Accepted'").bind(caller.id, entry.uri, entry.summary, now, requestId, caller.id, version)),
       env.DB.prepare(
         `INSERT INTO activity_events
-          (project_id, actor_id, principal_provider, principal_issuer, principal_kind, principal_subject, type, payload_json, created_at)
-         SELECT project_id, ?, ?, ?, ?, ?, 'work_request.fulfilled', ?, ?
+          (project_id, request_id, actor_id, principal_provider, principal_issuer, principal_kind, principal_subject, type, payload_json, created_at)
+         SELECT project_id, id, ?, ?, ?, ?, ?, 'work_request.fulfilled', ?, ?
            FROM work_requests
           WHERE id = ? AND recipient_id = ? AND version = ? AND state = 'Accepted'`,
       ).bind(caller.id, ...principalValues(caller), JSON.stringify({ request_id: requestId, evidence_count: evidence.length }), now, requestId, caller.id, version),
@@ -270,7 +326,8 @@ function cursor(value: string | null): { id: number; value: string } | Response 
 
 type ActivityRow = {
   id: number;
-  project_id: string;
+  project_id: string | null;
+  request_id: string | null;
   actor_id: string;
   principal_provider: "cloudflare_access" | null;
   principal_issuer: string | null;
@@ -283,7 +340,7 @@ type ActivityRow = {
 
 async function activitySince(env: Env, after: number, fallbackCursor: string) {
   const result = await env.DB.prepare(
-    `SELECT id, project_id, actor_id, principal_provider, principal_issuer,
+    `SELECT id, project_id, request_id, actor_id, principal_provider, principal_issuer,
             principal_kind, principal_subject, type, payload_json, created_at
        FROM activity_events
       WHERE id > ?
@@ -293,6 +350,7 @@ async function activitySince(env: Env, after: number, fallbackCursor: string) {
   const activity = result.results.map((event) => ({
     id: event.id,
     project_id: event.project_id,
+    request_id: event.request_id,
     actor: { id: event.actor_id },
     principal: event.principal_provider && event.principal_issuer !== null && event.principal_kind && event.principal_subject
       ? {
@@ -327,11 +385,14 @@ export async function myWork(env: Env, caller: Actor, afterValue: string | null)
   ]);
   return json({
     obligations: [
-      ...accepted.results.map((entry) => ({ source: "accepted_request", request_id: entry.id, project_id: entry.project_id, title: entry.title, detail: entry.detail })),
+      ...accepted.results.map((entry) => {
+        const scope = acceptedScope(entry);
+        return { source: "accepted_request", request_id: entry.id, project_id: entry.project_id, title: scope?.title ?? entry.title, detail: scope?.detail ?? entry.detail };
+      }),
       ...ownedProjects.results.map((project) => ({ source: "owner_next_action", project_id: project.id, title: "Project owner next action", detail: project.next_action })),
     ],
-    outbound_requests: outbound.results.map(requestResponse),
-    inbound_requests: inbound.results.map(requestResponse),
+    outbound_requests: outbound.results.map((entry) => requestResponse(entry)),
+    inbound_requests: inbound.results.map((entry) => requestResponse(entry)),
     pull_candidates: candidates.results.map((entry) => ({ id: entry.id, project_id: entry.project_id, actor: { id: entry.actor_id }, title: entry.title, detail: entry.detail, created_at: entry.created_at })),
     activity: changes.activity,
     next_cursor: changes.next_cursor,

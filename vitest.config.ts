@@ -42,6 +42,7 @@ export default defineConfig({
   test: {
     projects: [
       workerProject("worker", ["worker/test/**/*.spec.ts"], validIssuer, [
+        "worker/test/standalone-review-migration.spec.ts",
         "worker/test/production-identity-jwks.spec.ts",
         "worker/test/production-identity-misconfig.spec.ts",
         "worker/test/production-identity-placeholder.spec.ts",
@@ -51,6 +52,22 @@ export default defineConfig({
       workerProject("worker-auth-jwks", ["worker/test/production-identity-jwks.spec.ts"], "https://fleet-jwks.cloudflareaccess.com"),
       workerProject("worker-auth-misconfig", ["worker/test/production-identity-misconfig.spec.ts"], "http://fleet-test.cloudflareaccess.com"),
       workerProject("worker-auth-placeholder", ["worker/test/production-identity-placeholder.spec.ts"], checkedInIssuer),
+      defineProject({
+        plugins: [
+          cloudflareTest(async () => ({
+            wrangler: { configPath: "./wrangler.jsonc" },
+            miniflare: {
+              bindings: {
+                TEST_MIGRATIONS: await readD1Migrations(path.join(projectRoot, "worker/migrations")),
+              },
+            },
+          })),
+        ],
+        test: {
+          name: "worker-standalone-migration",
+          include: ["worker/test/standalone-review-migration.spec.ts"],
+        },
+      }),
       defineProject({
         test: {
           name: "board",

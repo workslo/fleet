@@ -156,7 +156,7 @@ describe("FleetRoutineClient — reconcile (the Fleet Routine)", () => {
           recipient: { id: "codex" },
           title: "Review client",
           detail: "Please review",
-          state: "Pending",
+          state: "Returned",
           version: 1,
           accepted_at: null,
           fulfilled_at: null,
@@ -206,7 +206,7 @@ describe("FleetRoutineClient — reconcile (the Fleet Routine)", () => {
     // 2. What outbound requests exist?
     expect(result.outboundRequests).toHaveLength(1);
     expect(result.outboundRequests[0]?.title).toBe("Review client");
-    expect(result.outboundRequests[0]?.state).toBe("Pending");
+    expect(result.outboundRequests[0]?.state).toBe("Returned");
 
     // 3. What new inbound requests need attention?
     expect(result.inboundRequests).toHaveLength(1);
@@ -425,6 +425,94 @@ describe("FleetRoutineClient — createWorkRequest", () => {
 
     expect(result.state).toBe("Pending");
     expect(result.id).toBe("req-3");
+  });
+});
+
+describe("FleetRoutineClient — standalone review requests", () => {
+  it("creates a standalone request without inventing a Fleet Project", async () => {
+    const store = makeCursorStore();
+    const fetchFn = makeFetch((url, init) => {
+      expect(url).toBe("https://fleet.test/v1/requests");
+      expect(init?.headers?.["If-Match"]).toBeUndefined();
+      expect(JSON.parse(init?.body ?? "{}")).toEqual({
+        recipient_id: "codex",
+        title: "Review a personal experiment",
+        detail: "Review only the deliberately shared artifact.",
+        artifact: {
+          uri: "https://home.example.test/shareable",
+          summary: "Shareable experiment",
+        },
+      });
+      return {
+        status: 201,
+        body: {
+          id: "standalone-1",
+          project_id: null,
+          requester: { id: "juniorslo" },
+          recipient: { id: "codex" },
+          title: "Review a personal experiment",
+          detail: "Review only the deliberately shared artifact.",
+          artifact: { uri: "https://home.example.test/shareable", summary: "Shareable experiment" },
+          accepted_scope: null,
+          evidence: [],
+          state: "Pending",
+          version: 1,
+          accepted_at: null,
+          fulfilled_at: null,
+          created_at: "2026-09-07T00:00:00Z",
+          updated_at: "2026-09-07T00:00:00Z",
+        },
+      };
+    });
+    const client = makeClient(fetchFn, store);
+
+    const result = await client.createStandaloneRequest(
+      "codex",
+      "Review a personal experiment",
+      "Review only the deliberately shared artifact.",
+      "standalone-create-key",
+      { uri: "https://home.example.test/shareable", summary: "Shareable experiment" },
+    );
+
+    expect(result).toMatchObject({ id: "standalone-1", project_id: null, state: "Pending" });
+  });
+
+  it("reads fulfilled standalone evidence through the supported request surface", async () => {
+    const store = makeCursorStore();
+    const fetchFn = makeFetch((url, init) => {
+      expect(url).toBe("https://fleet.test/v1/requests/standalone%2F1");
+      expect(init?.method).toBe("GET");
+      return {
+        status: 200,
+        body: {
+          id: "standalone/1",
+          project_id: null,
+          requester: { id: "juniorslo" },
+          recipient: { id: "codex" },
+          title: "Review a personal experiment",
+          detail: "Review only the deliberately shared artifact.",
+          artifact: null,
+          accepted_scope: {
+            title: "Review a personal experiment",
+            detail: "Review only the deliberately shared artifact.",
+            artifact: null,
+          },
+          evidence: [{ uri: "https://reviews.example.test/1", summary: "Completed review", created_at: "2026-09-07T02:00:00Z" }],
+          state: "Fulfilled",
+          version: 3,
+          accepted_at: "2026-09-07T01:00:00Z",
+          fulfilled_at: "2026-09-07T02:00:00Z",
+          created_at: "2026-09-07T00:00:00Z",
+          updated_at: "2026-09-07T02:00:00Z",
+        },
+      };
+    });
+    const client = makeClient(fetchFn, store);
+
+    const result = await client.getRequest("standalone/1");
+
+    expect(result.evidence).toEqual([{ uri: "https://reviews.example.test/1", summary: "Completed review", created_at: "2026-09-07T02:00:00Z" }]);
+    expect(result.accepted_scope?.title).toBe("Review a personal experiment");
   });
 });
 
