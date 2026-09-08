@@ -16,6 +16,15 @@ For the same logical write, retry with the same `Idempotency-Key`; do not make
 a second request merely because the first response was lost. Request acceptance
 and fulfillment also require the current quoted `If-Match` version.
 
+The reference client may create a project-linked request or a standalone
+request. Standalone requests use `POST /v1/requests`; they remain discoverable
+through the normal work snapshot, and `GET /v1/requests/:id` returns their
+frozen accepted scope and fulfillment Evidence. The client uses the same
+accept and fulfill transitions for both forms. Project association does not
+change recipient-only authority or retry semantics.
+Routines must treat `project_id` as nullable on request summaries, obligations,
+and activity, and must not key standalone handling on a project identifier.
+
 Fleet carries shared project state, requests, derived obligations, evidence,
 and decisions. HEARTBEAT and JOURNAL prose, along with personal-work interiors,
 never enter Fleet.

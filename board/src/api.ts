@@ -47,18 +47,22 @@ export type ProjectCard = {
 
 export type WorkRequest = {
   id: string;
-  project_id: string;
+  project_id: string | null;
   requester: ActorRef;
   recipient: ActorRef;
   title: string;
   detail: string;
+  artifact: Evidence | null;
+  accepted_scope: { title: string; detail: string; artifact: Evidence | null } | null;
+  evidence?: Evidence[];
   state: string;
+  version: number;
 };
 
 export type Obligation = {
   source: "accepted_request" | "owner_next_action";
   request_id?: string;
-  project_id: string;
+  project_id: string | null;
   title?: string;
   detail?: string | null;
 };
@@ -111,6 +115,10 @@ export class FleetApi {
     return this.get(`/v1/projects/${encodeURIComponent(projectId)}`);
   }
 
+  async request(requestId: string): Promise<WorkRequest> {
+    return this.get(`/v1/requests/${encodeURIComponent(requestId)}`);
+  }
+
   async myWork(after = "0"): Promise<AgentWorkSnapshot> {
     return this.get(`/v1/me/work?after=${encodeURIComponent(after)}`);
   }
@@ -119,25 +127,56 @@ export class FleetApi {
     return this.get("/v1/decisions");
   }
 
+  async createStandaloneRequest(input: {
+    recipient_id: string;
+    title: string;
+    detail: string;
+    artifact?: Evidence;
+  }, idempotencyKey: string): Promise<WorkRequest> {
+    return this.post("/v1/requests", input, undefined, idempotencyKey);
+  }
+
+  async acceptRequest(requestId: string, version: number, idempotencyKey: string): Promise<WorkRequest> {
+    return this.post(`/v1/requests/${encodeURIComponent(requestId)}/accept`, {}, version, idempotencyKey);
+  }
+
+  async fulfillRequest(requestId: string, version: number, evidence: Evidence[], idempotencyKey: string): Promise<WorkRequest> {
+    return this.post(`/v1/requests/${encodeURIComponent(requestId)}/fulfill`, { evidence }, version, idempotencyKey);
+  }
+
   private async get<T>(path: string): Promise<T> {
     const headers = new Headers({ Accept: "application/json" });
+    return this.send(path, { headers }, "Fleet could not be reached. Check the connection and retry.");
+  }
+
+  private async post<T>(path: string, body: object, version?: number, idempotencyKey: string = crypto.randomUUID()): Promise<T> {
+    const headers = new Headers({
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "Idempotency-Key": idempotencyKey,
+    });
+    if (version !== undefined) headers.set("If-Match", `"${version}"`);
+    return this.send(path, { method: "POST", headers, body: JSON.stringify(body) }, "Fleet could not be reached. Refresh current work before retrying this action.");
+  }
+
+  private async send<T>(path: string, init: RequestInit, networkError: string): Promise<T> {
     let response: Response;
     try {
-      response = await fetch(path, { headers, credentials: "same-origin" });
+      response = await fetch(path, { ...init, credentials: "same-origin" });
     } catch {
-      throw new FleetApiError("Fleet could not be reached. Check the connection and retry.", 0);
+      throw new FleetApiError(networkError, 0);
     }
 
-    let body: T | ApiErrorBody;
+    let responseBody: T | ApiErrorBody;
     try {
-      body = await response.json() as T | ApiErrorBody;
+      responseBody = await response.json() as T | ApiErrorBody;
     } catch {
       throw new FleetApiError(`Fleet returned an unreadable response (${response.status}).`, response.status);
     }
     if (!response.ok) {
-      const error = body as ApiErrorBody;
-      throw new FleetApiError(error.message ?? `Fleet request failed (${response.status}).`, response.status);
+      const apiError = responseBody as ApiErrorBody;
+      throw new FleetApiError(apiError.message ?? `Fleet request failed (${response.status}).`, response.status);
     }
-    return body as T;
+    return responseBody as T;
   }
 }

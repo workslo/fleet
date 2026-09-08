@@ -52,11 +52,14 @@ export type AuthorizationInput = {
 
 export type WorkRequestRow = {
   id: string;
-  project_id: string;
+  project_id: string | null;
   requester_id: string;
   recipient_id: string;
   title: string;
   detail: string;
+  artifact_uri: string | null;
+  artifact_summary: string | null;
+  accepted_scope_json: string | null;
   state: string;
   version: number;
   accepted_at: string | null;

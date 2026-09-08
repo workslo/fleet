@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { FleetApi, FleetApiError, type AgentWorkSnapshot, type Decision, type FleetIdentity, type ProjectCard } from "./api";
+import { FleetApi, FleetApiError, type AgentWorkSnapshot, type Decision, type FleetIdentity, type ProjectCard, type WorkRequest } from "./api";
 import { DecisionsView } from "./views/DecisionsView";
 import { MyWorkView } from "./views/MyWorkView";
 import { PortfolioView } from "./views/PortfolioView";
@@ -22,6 +22,8 @@ export function App() {
   const [error, setError] = useState<BoardError | null>(null);
   const [loading, setLoading] = useState(true);
   const [projectLoading, setProjectLoading] = useState(false);
+  const [actionPending, setActionPending] = useState(false);
+  const [requestDetails, setRequestDetails] = useState<Record<string, WorkRequest>>({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -71,6 +73,44 @@ export function App() {
     void load();
   }, [error, load, loadProject, selectedProjectId]);
 
+  const runWorkAction = useCallback(async (action: () => Promise<WorkRequest>): Promise<boolean> => {
+    setActionPending(true);
+    setError(null);
+    try {
+      let changedRequest: WorkRequest;
+      try {
+        changedRequest = await action();
+      } catch (caught) {
+        setError({ message: caught instanceof FleetApiError ? caught.message : "The Fleet action failed. Refresh current work before retrying.", scope: "global" });
+        return false;
+      }
+      setRequestDetails((current) => ({ ...current, [changedRequest.id]: changedRequest }));
+      try {
+        const [work, requestDetail] = await Promise.all([api.myWork(), api.request(changedRequest.id)]);
+        setData((current) => ({ ...current, work }));
+        setRequestDetails((current) => ({ ...current, [changedRequest.id]: requestDetail }));
+      } catch {
+        setError({ message: "The Fleet action succeeded, but current work could not be refreshed. Reload current work before another action.", scope: "global" });
+      }
+      return true;
+    } finally {
+      setActionPending(false);
+    }
+  }, [api]);
+
+  const loadRequest = useCallback(async (requestId: string) => {
+    setActionPending(true);
+    setError(null);
+    try {
+      const request = await api.request(requestId);
+      setRequestDetails((current) => ({ ...current, [requestId]: request }));
+    } catch (caught) {
+      setError({ message: caught instanceof FleetApiError ? caught.message : "The request could not be loaded. Retry from current work.", scope: "global" });
+    } finally {
+      setActionPending(false);
+    }
+  }, [api]);
+
   return (
     <div className="app-shell">
       <header className="site-header">
@@ -92,7 +132,17 @@ export function App() {
         {!loading && view === "portfolio" ? <PortfolioView projects={data.projects} onSelectProject={(id) => void selectProject(id)} /> : null}
         {!loading && view === "project" && selectedProject ? <ProjectView project={selectedProject} onBack={() => setView("portfolio")} /> : null}
         {!loading && view === "project" && !selectedProject && !error ? <p>Choose a Fleet Project from the portfolio.</p> : null}
-        {!loading && view === "my-work" ? <MyWorkView work={data.work} /> : null}
+        {!loading && view === "my-work" ? (
+          <MyWorkView
+            work={data.work}
+            requestDetails={requestDetails}
+            busy={actionPending}
+            onCreate={(input, idempotencyKey) => runWorkAction(() => api.createStandaloneRequest(input, idempotencyKey))}
+            onAccept={(request, idempotencyKey) => runWorkAction(() => api.acceptRequest(request.id, request.version, idempotencyKey))}
+            onFulfill={(request, evidence, idempotencyKey) => runWorkAction(() => api.fulfillRequest(request.id, request.version, evidence, idempotencyKey))}
+            onView={(request) => loadRequest(request.id)}
+          />
+        ) : null}
         {!loading && view === "pull-candidates" ? <PullCandidatesView candidates={data.work.pull_candidates} /> : null}
         {!loading && view === "decisions" ? <DecisionsView decisions={data.decisions} /> : null}
       </main>

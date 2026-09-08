@@ -36,6 +36,12 @@ actor may act for another seat. Authenticated browser mutations additionally
 require an `Origin` matching the request origin; service principals do not use
 the browser CSRF boundary.
 
+A standalone Work Request is bounded ad hoc work, not a Fleet Project or an
+authority envelope. Its recipient alone may accept or fulfill it. Acceptance
+creates only the obligation described by the frozen accepted scope; it grants
+no project ownership, Shane-only authority, production authority, or authority
+to act as another seat.
+
 Every active Fleet actor may read shared Fleet records. Mutation authority
 continues to follow the actor-specific domain rules. Access-specific claims are
 confined to the authentication boundary; domain handlers receive a resolved

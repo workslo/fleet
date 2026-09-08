@@ -26,10 +26,23 @@ Obligation. Silence creates no obligation.
 ## Work Requests
 
 Work Requests use these lifecycle names exactly: `Pending`, `Accepted`,
-`Fulfilled`, `Declined`, and `Withdrawn`. This V1 slice creates, accepts, and
-fulfills requests. A requester creates a `Pending` request; only its recipient
-may accept or fulfill it. Acceptance derives an `accepted_request` obligation.
+`Fulfilled`, `Returned`, `Declined`, `Withdrawn`, and `Expired`. This V1 slice
+exposes only the create, accept, and fulfill transitions; the other endings are
+reserved by the signed agreement and are not implemented here. A request may be
+associated with an Active Fleet Project or stand alone as bounded ad hoc work.
+A standalone request does not create a Fleet Project and does not import the
+linked personal artifact into Fleet.
+
+A requester creates a `Pending` request; only its recipient may accept or
+fulfill it. Pending visibility creates no obligation. Acceptance stores the
+exact title, detail, and deliberately shared artifact link as the accepted
+scope and derives one `accepted_request` obligation for that recipient.
 Fulfillment discharges that obligation and records its supplied Evidence links.
+The request and its Evidence remain readable after fulfillment.
+
+Project association does not alter authority. A standalone request grants no
+project ownership, Shane-only authority, production authority, or authority to
+act as another seat.
 
 ## Pull Candidates and project-owner work
 
