@@ -1,4 +1,4 @@
-- [ ] Task 1: Local export and clean restore (M)
-- [ ] Task 2: Recovered Worker behavior (M) — deps: 1
-- [ ] Task 3: Owner runbook and verification gate (S) — deps: 1,2
+- [x] Task 1: Local export and clean restore (M)
+- [x] Task 2: Recovered Worker behavior (M) — deps: 1
+- [x] Task 3: Owner runbook and verification gate (S) — deps: 1,2
 - [ ] Final verification, reviews and PR delivery
