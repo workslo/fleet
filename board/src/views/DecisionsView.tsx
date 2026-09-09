@@ -54,10 +54,21 @@ function evidence(data: FormData) {
 }
 
 function OutcomeFields({ prefix }: { prefix: string }) {
+  const validatePair = (event: FormEvent<HTMLInputElement>) => {
+    const fields = event.currentTarget.form?.elements;
+    const uri = fields?.namedItem("evidence_uri");
+    const summary = fields?.namedItem("evidence_summary");
+    if (!(uri instanceof HTMLInputElement) || !(summary instanceof HTMLInputElement)) return;
+    const hasEvidence = uri.value.trim().length > 0 || summary.value.trim().length > 0;
+    uri.required = hasEvidence;
+    summary.required = hasEvidence;
+    uri.setCustomValidity(hasEvidence && !uri.value.trim() ? "Add a URL for this evidence." : "");
+    summary.setCustomValidity(hasEvidence && !summary.value.trim() ? "Describe what this evidence supports." : "");
+  };
   return <>
     <label>{prefix} summary<textarea name="summary" required /></label>
-    <label>{prefix} evidence URL<input name="evidence_uri" type="url" /></label>
-    <label>{prefix} evidence summary<input name="evidence_summary" /></label>
+    <label>{prefix} evidence URL<input name="evidence_uri" type="url" onInput={validatePair} /></label>
+    <label>{prefix} evidence summary<input name="evidence_summary" onInput={validatePair} /></label>
   </>;
 }
 

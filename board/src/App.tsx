@@ -13,6 +13,13 @@ type BoardError = { message: string; scope: "global" | "project" };
 const emptyWork: AgentWorkSnapshot = { obligations: [], outbound_requests: [], inbound_requests: [], pull_candidates: [], activity: [], next_cursor: "0" };
 const emptyData: BoardData = { identity: null, projects: [], work: emptyWork, decisions: [] };
 
+function upsertDecision(records: Decision[], changed: Decision): Decision[] {
+  return [...records.filter((entry) => entry.id !== changed.id), changed].sort((left, right) => {
+    if (left.created_at !== right.created_at) return left.created_at < right.created_at ? -1 : 1;
+    return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
+  });
+}
+
 export function App() {
   const api = useMemo(() => new FleetApi(), []);
   const [data, setData] = useState<BoardData>(emptyData);
@@ -99,14 +106,29 @@ export function App() {
   }, [api]);
 
   const runNeedsShaneAction = useCallback(async (action: () => Promise<Decision>) => {
-    const changed = await action();
-    setData((current) => ({ ...current, decisions: [...current.decisions.filter((entry) => entry.id !== changed.id), changed] }));
+    setError(null);
+    let changed: Decision;
+    try {
+      changed = await action();
+    } catch (caught) {
+      if (!(caught instanceof FleetApiError) || caught.status !== 412) throw caught;
+      let message = "This entry changed before your action was recorded. Review the refreshed entry before trying again; resolved entries are in history.";
+      try {
+        const refreshed = await api.decisions(true);
+        setData((current) => ({ ...current, decisions: refreshed.decisions }));
+      } catch {
+        message = "This entry changed, and current records could not be refreshed. Refresh Needs Shane before trying again.";
+      }
+      setError({ message, scope: "global" });
+      throw new FleetApiError(message, 412);
+    }
+    setData((current) => ({ ...current, decisions: upsertDecision(current.decisions, changed) }));
     setRequestDetails((current) => {
       const source = changed.work_request_id ? current[changed.work_request_id] : undefined;
-      return source ? { ...current, [source.id]: { ...source, needs_shane: [...(source.needs_shane ?? []).filter((entry) => entry.id !== changed.id), changed] } } : current;
+      return source ? { ...current, [source.id]: { ...source, needs_shane: upsertDecision(source.needs_shane ?? [], changed) } } : current;
     });
     setSelectedProject((current) => current?.id === changed.project_id
-      ? { ...current, needs_shane: [...(current.needs_shane ?? []).filter((entry) => entry.id !== changed.id), changed] } : current);
+      ? { ...current, needs_shane: upsertDecision(current.needs_shane ?? [], changed) } : current);
     try {
       const work = await api.myWork();
       setData((current) => ({ ...current, work }));

@@ -13,17 +13,19 @@ const initial: NeedsShane = {
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 const work = { obligations: [{ source: "accepted_request", project_id: null, request_id: "request-1", title: "Verify access" }], inbound_requests: [], outbound_requests: [], pull_candidates: [], activity: [], next_cursor: "0" };
 
-function fixture(actor = "shane", seed = initial, loseDecision = false, loseCreate = false) {
+function fixture(actor = "shane", seed = initial, loseDecision = false, loseCreate = false, options: { staleCompletion?: "pending" | "resolved"; extraRecord?: NeedsShane } = {}) {
   let record = structuredClone(seed);
   const attempts: Array<{ key: string | null; version: string | null; body: string }> = [];
   let created: unknown;
+  const completionAttempts: Array<{ key: string | null; version: string | null }> = [];
+  const records = () => [record, ...(options.extraRecord ? [options.extraRecord] : [])];
   const creationAttempts: Array<{ key: string | null; body: string }> = [];
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     if (url === "/v1/me") return json({ actor: { id: actor, display_name: actor }, principal: { kind: actor === "shane" ? "human" : "service" } });
     if (url === "/v1/portfolio") return json({ projects: [] });
     if (url === "/v1/me/work?after=0") return json({ ...work, needs_shane: [record] });
-    if (url === "/v1/decisions?state=all") return json({ decisions: [record] });
-    if (url === "/v1/decisions" && init?.method !== "POST") return json({ decisions: record.state === "Pending" ? [record] : [] });
+    if (url === "/v1/decisions?state=all") return json({ decisions: records() });
+    if (url === "/v1/decisions" && init?.method !== "POST") return json({ decisions: records().filter((entry) => entry.state === "Pending") });
     if (url === "/v1/decisions" && init?.method === "POST") {
       creationAttempts.push({ key: new Headers(init.headers).get("Idempotency-Key"), body: String(init.body) });
       created = JSON.parse(String(init.body));
@@ -38,6 +40,12 @@ function fixture(actor = "shane", seed = initial, loseDecision = false, loseCrea
       return json(record);
     }
     if (url === "/v1/decisions/need-1/complete-action") {
+      completionAttempts.push({ key: new Headers(init?.headers).get("Idempotency-Key"), version: new Headers(init?.headers).get("If-Match") });
+      if (options.staleCompletion && completionAttempts.length === 1) {
+        record = { ...record, version: 2, delegation: { actor: { id: "shane" }, delegate: { id: "codex" }, summary: "Delegated in another session", at: initial.created_at } };
+        if (options.staleCompletion === "resolved") record = { ...record, state: "Resolved", action_status: "completed", action: { actor: { id: "codex" }, summary: "Completed elsewhere", at: initial.created_at, evidence: [] } };
+        return json({ message: "Needs Shane version is stale" }, 412);
+      }
       expect(new Headers(init?.headers).get("If-Match")).toBe(`"${record.version}"`);
       const body = JSON.parse(String(init?.body));
       record = { ...record, version: record.version + 1, state: "Resolved", action_status: "completed", action: { ...body, actor: { id: actor }, at: "2026-09-09T02:00:00Z" } };
@@ -45,7 +53,7 @@ function fixture(actor = "shane", seed = initial, loseDecision = false, loseCrea
     }
     return json({ message: "unexpected request" }, 404);
   }));
-  return { attempts, creationAttempts, record: () => record, created: () => created };
+  return { attempts, creationAttempts, completionAttempts, record: () => record, created: () => created };
 }
 async function open() {
   render(<App />);
@@ -138,6 +146,65 @@ describe("Needs Shane Board actions", () => {
     expect(state.creationAttempts).toHaveLength(2);
     expect(state.creationAttempts[1]).toEqual(state.creationAttempts[0]);
     expect(state.creationAttempts[0]?.key).toBeTruthy();
+  });
+
+
+  it("requires both evidence fields when either is supplied and allows clearing the optional pair", async () => {
+    const state = fixture(); await open();
+    await userEvent.type(screen.getByLabelText("Decision summary"), "Approved within scope");
+    const uri = screen.getByLabelText("Decision evidence URL");
+    const summary = screen.getByLabelText("Decision evidence summary");
+    const submit = screen.getByRole("button", { name: "Record decision for Enable agreed access" });
+    await userEvent.type(uri, "https://example.test/receipt");
+    await userEvent.click(submit);
+    expect(summary).toBeRequired();
+    expect(summary).toBeInvalid();
+    expect(state.attempts).toHaveLength(0);
+    await userEvent.clear(uri);
+    expect(summary).not.toBeRequired();
+    await userEvent.type(summary, "Approval receipt");
+    await userEvent.click(submit);
+    expect(uri).toBeRequired();
+    expect(uri).toBeInvalid();
+    expect(state.attempts).toHaveLength(0);
+    await userEvent.type(uri, "https://example.test/receipt");
+    await userEvent.click(submit);
+    expect(await screen.findByText("State: Pending. Action: pending.")).toBeVisible();
+    expect(JSON.parse(state.attempts[0]?.body ?? "null").evidence).toEqual([{ uri: "https://example.test/receipt", summary: "Approval receipt" }]);
+  });
+
+  it("refreshes a stale entry and waits for a new user action with its current version and a new key", async () => {
+    const state = fixture("shane", { ...initial, kind: "action", action_status: "pending" }, false, false, { staleCompletion: "pending" }); await open();
+    await userEvent.type(screen.getByLabelText("Action completion summary"), "Access enabled");
+    await userEvent.click(screen.getByRole("button", { name: "Complete action for Enable agreed access" }));
+    expect(await screen.findByText(/Action delegated to codex by shane/)).toBeVisible();
+    expect(screen.getAllByText(/Review the refreshed entry/).length).toBeGreaterThan(0);
+    expect(state.completionAttempts).toHaveLength(1);
+    expect(screen.getByLabelText("Action completion summary")).not.toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Complete action for Enable agreed access" }));
+    expect(await screen.findByText("No decisions or actions need Shane’s attention.")).toBeVisible();
+    expect(state.completionAttempts).toHaveLength(2);
+    expect(state.completionAttempts.map((attempt) => attempt.version)).toEqual(['"1"', '"2"']);
+    expect(state.completionAttempts[1]?.key).not.toBe(state.completionAttempts[0]?.key);
+    expect(screen.queryAllByRole("alert")).toHaveLength(0);
+  });
+
+  it("keeps a global stale-entry explanation when refreshed work is already resolved", async () => {
+    const state = fixture("shane", { ...initial, kind: "action", action_status: "pending" }, false, false, { staleCompletion: "resolved" }); await open();
+    await userEvent.type(screen.getByLabelText("Action completion summary"), "Access enabled");
+    await userEvent.click(screen.getByRole("button", { name: "Complete action for Enable agreed access" }));
+    expect(await screen.findByText("No decisions or actions need Shane’s attention.")).toBeVisible();
+    expect(screen.getByRole("alert")).toHaveTextContent("resolved entries are in history");
+    expect(state.completionAttempts).toHaveLength(1);
+  });
+
+  it("retains server creation ordering when an older combined ask is approved", async () => {
+    fixture("shane", initial, false, false, { extraRecord: { ...initial, id: "need-2", question: "Later request", created_at: "2026-09-10T00:00:00Z" } }); await open();
+    const first = within(screen.getByRole("form", { name: "Record decision for Enable agreed access" }));
+    await userEvent.type(first.getByLabelText("Decision summary"), "Approved");
+    await userEvent.click(first.getByRole("button", { name: "Record decision for Enable agreed access" }));
+    await screen.findByText("State: Pending. Action: pending.");
+    expect(screen.getAllByRole("heading", { level: 2 }).map((heading) => heading.textContent)).toEqual(["Enable agreed access", "Later request"]);
   });
 
 });
