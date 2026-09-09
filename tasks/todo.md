@@ -1,0 +1,4 @@
+- [x] Task 1: Needs Shane persistence and lifecycle (M) — deps: none
+- [x] Task 2: Source work and native reconciliation (M) — deps: 1
+- [x] Task 3: Needs Shane Board actions (M) — deps: 1
+- [ ] Final verification, reviews and PR delivery

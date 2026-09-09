@@ -51,3 +51,15 @@ Mutations require a current version and a durable idempotency key. Stale or
 unauthorized transitions fail visibly and attributed activity remains append
 only. New activity captures both the resolved Fleet actor and the exact
 principal kind, issuer, and subject that authenticated the mutation.
+
+For Needs Shane, every active actor may create an explicitly source-linked ask
+or read shared records. Shane alone records decisions or names/replaces an
+action's delegate. Only Shane or that currently named, authenticated delegate
+may record action completion, always attributed to the actual caller. An
+action contingent on approval cannot be delegated or completed before Shane
+approves it. Bodies cannot nominate the deciding or performing actor.
+
+Decision outcomes document the bounded ask; they do not bypass the existing
+Project authorization, cancellation, final-acceptance or production gates.
+Recording an action does not perform it. Its summary and evidence state what
+was done under the applicable authority.

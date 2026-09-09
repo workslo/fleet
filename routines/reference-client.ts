@@ -25,6 +25,8 @@
  */
 
 import { buildAuthHeaders, type ReferenceClientAuth } from "./access-auth";
+import type { CompleteAction, CreateNeedsShane, DelegateAction, NeedsShane, RecordDecision } from "../contracts/needs-shane";
+export type { CompleteAction, CreateNeedsShane, DelegateAction, NeedsShane, RecordDecision } from "../contracts/needs-shane";
 
 // ---------------------------------------------------------------------------
 // Contract types — matching contracts/http-v1.md
@@ -64,6 +66,7 @@ export interface AcceptedRequestScope {
 }
 
 export interface WorkRequestSummary {
+  needs_shane?: NeedsShane[];
   id: string;
   project_id: string | null;
   requester: ActorRef;
@@ -100,6 +103,7 @@ export interface ActivityEvent {
 }
 
 export interface AgentWorkSnapshot {
+  needs_shane?: NeedsShane[];
   obligations: Obligation[];
   outbound_requests: WorkRequestSummary[];
   inbound_requests: WorkRequestSummary[];
@@ -108,19 +112,15 @@ export interface AgentWorkSnapshot {
   next_cursor: string;
 }
 
-export interface DecisionRequest {
-  id: string;
-  project_id: string;
-  question: string;
-  state: string;
-  created_at: string;
-}
+export type DecisionRequest = NeedsShane;
 
 // ---------------------------------------------------------------------------
 // The four Fleet Routine answers
 // ---------------------------------------------------------------------------
 
 export interface FleetRoutineResult {
+  /** Current source-linked Needs Shane records, including resolved outcomes. */
+  needsShane: NeedsShane[];
   /** 1. What work is owed now? */
   obligations: Obligation[];
   /** 2. What outbound requests exist, and what is the state of each? */
@@ -287,6 +287,7 @@ export class FleetRoutineClient {
     await this.cursorStore.write(snapshot.next_cursor);
 
     return {
+      needsShane: snapshot.needs_shane ?? [],
       obligations: snapshot.obligations,
       outboundRequests: snapshot.outbound_requests,
       inboundRequests: snapshot.inbound_requests,
@@ -463,14 +464,37 @@ export class FleetRoutineClient {
     return result;
   }
 
-  /** Read Decision requests. May return an empty array in V1. */
-  async getDecisions(): Promise<DecisionRequest[]> {
+  /** Read the pending queue, or include resolved history explicitly. */
+  async getDecisions(state: "pending" | "all" = "pending"): Promise<DecisionRequest[]> {
     const response = await this.fetchFn(
-      `${this.baseUrl}/v1/decisions`,
+      `${this.baseUrl}/v1/decisions${state === "all" ? "?state=all" : ""}`,
       { method: "GET", headers: await this.authHeaders() },
     );
     const envelope = await this.parseJson<{ decisions: DecisionRequest[] }>(response);
     return envelope.decisions;
+  }
+
+  async getDecision(id: string): Promise<NeedsShane> {
+    const response = await this.fetchFn(`${this.baseUrl}/v1/decisions/${encodeURIComponent(id)}`, {
+      method: "GET", headers: await this.authHeaders(),
+    });
+    return this.parseJson<NeedsShane>(response);
+  }
+
+  async createNeedsShane(input: CreateNeedsShane, idempotencyKey: string): Promise<NeedsShane> {
+    return this.mutate("/v1/decisions", undefined, input, idempotencyKey);
+  }
+
+  async recordDecision(id: string, version: number, input: RecordDecision, idempotencyKey: string): Promise<NeedsShane> {
+    return this.mutate(`/v1/decisions/${encodeURIComponent(id)}/decide`, version, input, idempotencyKey);
+  }
+
+  async completeAction(id: string, version: number, input: CompleteAction, idempotencyKey: string): Promise<NeedsShane> {
+    return this.mutate(`/v1/decisions/${encodeURIComponent(id)}/complete-action`, version, input, idempotencyKey);
+  }
+
+  async delegateAction(id: string, version: number, input: DelegateAction, idempotencyKey: string): Promise<NeedsShane> {
+    return this.mutate(`/v1/decisions/${encodeURIComponent(id)}/delegate-action`, version, input, idempotencyKey);
   }
 
   // --- Internal ---

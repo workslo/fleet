@@ -1,4 +1,5 @@
 import { error, isResponse, json, requestJson } from "./http";
+import { decisionsForSource } from "./decisions";
 import { principalValues } from "./types";
 import type { Actor, AuthorizationInput, Env, ProjectRow } from "./types";
 
@@ -141,6 +142,7 @@ async function card(env: Env, row: ProjectRow) {
     health: row.health,
     next_action: row.next_action,
     version: row.version,
+    needs_shane: await decisionsForSource(env, { projectId: row.id }),
     envelope: currentEnvelope && {
       revision: currentEnvelope.revision,
       outcome: currentEnvelope.outcome,
