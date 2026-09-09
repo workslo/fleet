@@ -507,6 +507,112 @@ describe("FleetRoutineClient — createWorkRequest", () => {
 });
 
 describe("FleetRoutineClient — standalone review requests", () => {
+  const standalonePaths = [
+    {
+      name: "create",
+      call: (client: FleetRoutineClient) => client.createStandaloneRequest(
+        "codex", "Review artifact", "Review the shared link", "create-key",
+      ),
+      path: "/v1/requests",
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Idempotency-Key": "create-key" },
+    },
+    {
+      name: "read",
+      call: (client: FleetRoutineClient) => client.getRequest("standalone/1"),
+      path: "/v1/requests/standalone%2F1",
+      method: "GET",
+      headers: {},
+    },
+    {
+      name: "accept",
+      call: (client: FleetRoutineClient) => client.acceptRequest("standalone/1", 1, "accept-key"),
+      path: "/v1/requests/standalone%2F1/accept",
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Idempotency-Key": "accept-key", "If-Match": '"1"' },
+    },
+    {
+      name: "fulfill",
+      call: (client: FleetRoutineClient) => client.fulfillRequest("standalone/1", 2, "fulfill-key"),
+      path: "/v1/requests/standalone%2F1/fulfill",
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Idempotency-Key": "fulfill-key", "If-Match": '"2"' },
+    },
+  ];
+
+  describe.each(standalonePaths)("$name transport", ({ call, path, method, headers }) => {
+    it("waits for credentials and refreshes both Access headers on every call", async () => {
+      const store = makeCursorStore();
+      store.stored = "42";
+      const gate = Promise.withResolvers<void>();
+      let requestNumber = 0;
+      const getCredentials = vi.fn(async () => {
+        await gate.promise;
+        requestNumber += 1;
+        return {
+          clientId: `fixture-id-${requestNumber}`,
+          clientSecret: `fixture-secret-${requestNumber}`,
+        };
+      });
+      const fetchFn = makeFetch(() => ({
+        status: 200, body: { id: "standalone/1", project_id: null },
+      }));
+      const client = makeClient(fetchFn, store, { mode: "access-pair", getCredentials });
+      expect(getCredentials).not.toHaveBeenCalled();
+
+      const firstRequest = call(client);
+      expect(getCredentials).toHaveBeenCalledTimes(1);
+      await Promise.resolve();
+      expect(fetchFn).not.toHaveBeenCalled();
+      gate.resolve();
+      await firstRequest;
+      await call(client);
+
+      expect(getCredentials).toHaveBeenCalledTimes(2);
+      expect(fetchFn).toHaveBeenCalledTimes(2);
+      for (const number of [1, 2]) {
+        expect(fetchFn).toHaveBeenNthCalledWith(number, `https://fleet.test${path}`, expect.objectContaining({
+          method,
+          headers: {
+            ...headers,
+            "CF-Access-Client-Id": `fixture-id-${number}`,
+            "CF-Access-Client-Secret": `fixture-secret-${number}`,
+          },
+        }));
+      }
+      expect(store.stored).toBe("42");
+    });
+
+    it("keeps only operation headers in external mode", async () => {
+      const fetchFn = makeFetch((_url, init) => {
+        expect(init?.headers).toEqual(headers);
+        return { status: 200, body: { id: "standalone/1", project_id: null } };
+      });
+      const client = makeClient(fetchFn, makeCursorStore(), { mode: "external" });
+
+      await call(client);
+
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(["rejected", "incomplete"])("stops before fetch for %s credentials", async (failure) => {
+      const store = makeCursorStore();
+      store.stored = "42";
+      const fetchFn = makeFetch(() => ({ status: 200, body: {} }));
+      const getCredentials = vi.fn(async () => {
+        if (failure === "rejected") throw new Error("fixture-secret-provider-failure");
+        return { clientId: "fixture-id", clientSecret: "" };
+      });
+      const client = makeClient(fetchFn, store, { mode: "access-pair", getCredentials });
+
+      await expect(call(client)).rejects.toThrow(CredentialProviderError);
+
+      expect(getCredentials).toHaveBeenCalledTimes(1);
+      expect(fetchFn).not.toHaveBeenCalled();
+      expect(store.stored).toBe("42");
+    });
+  });
+
   it("creates a standalone request without inventing a Fleet Project", async () => {
     const store = makeCursorStore();
     const fetchFn = makeFetch((url, init) => {
