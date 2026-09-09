@@ -2,7 +2,7 @@ import { enforceSameOriginMutation, resolveCaller } from "./auth";
 import { error, isResponse, json } from "./http";
 import { createDecision, getDecision, listDecisions, transitionDecision } from "./decisions";
 import { acceptOwnership, authorizeProject, createProject, getProject, portfolio } from "./projects";
-import { acceptRequest, activity, createPullCandidate, createRequest, fulfillRequest, getRequest, myWork } from "./work";
+import { transitionRequest, activity, createPullCandidate, createRequest, getRequest, myWork } from "./work";
 import type { Env } from "./types";
 
 function decodeRouteId(value: string): string | Response {
@@ -51,13 +51,15 @@ export default {
       return error("not_found", "route does not exist", 404);
     }
 
-    const requestMatch = url.pathname.match(/^\/v1\/requests\/([^/]+)(?:\/(accept|fulfill))?$/);
+    const requestMatch = url.pathname.match(/^\/v1\/requests\/([^/]+)(?:\/(accept|fulfill|decline|withdraw|return|expire|block|unblock))?$/);
     if (requestMatch) {
       const requestId = decodeRouteId(requestMatch[1] ?? "");
       if (isResponse(requestId)) return requestId;
       if (request.method === "GET" && !requestMatch[2]) return getRequest(env, requestId);
-      if (request.method === "POST" && requestMatch[2] === "accept") return acceptRequest(request, env, caller, requestId);
-      if (request.method === "POST" && requestMatch[2] === "fulfill") return fulfillRequest(request, env, caller, requestId);
+      if (request.method === "POST" && requestMatch[2]) {
+        const action = requestMatch[2] as "accept" | "fulfill" | "decline" | "withdraw" | "return" | "expire" | "block" | "unblock";
+        return transitionRequest(request, env, caller, requestId, action);
+      }
       return error("not_found", "route does not exist", 404);
     }
 

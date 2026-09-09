@@ -1,21 +1,11 @@
-<implementation_plan issue="https://github.com/workslo/fleet/issues/28" slice="Needs Shane" base="3c343121fec2a90139b9f39ada036e0f451e72f1">
-  <authorization><shane>ty - proceed with next slice</shane></authorization>
-  <scope>Decision-only, action-only, and combined requests; source-linked outcomes, explicit performer delegation, Board actions, native client access. Preserve the signed agreement and original work state. No deployment or activation.</scope>
-  <task id="1" size="M" dependencies="none">
-    <description>Store and transition one Needs Shane record with separate decision and action facts.</description>
-    <acceptance>Approval retains an unfinished action; decline never claims action completion. Only Shane decides or delegates; completion identifies the authenticated Shane or named delegate. Versions, actor-scoped replay, activity and outcome writes are atomic.</acceptance>
-    <verification>Worker HTTP lifecycle, authority, stale-write, concurrent/replay and migration tests.</verification>
-  </task>
-  <task id="2" size="M" dependencies="1">
-    <description>Expose source-linked records in project/request reads and relevant native reconciliation, including resolved outcomes.</description>
-    <acceptance>Source work remains unchanged when Shane's part resolves. Routine clients retain outcomes after cursor advancement and use request-time authentication.</acceptance>
-    <verification>Worker HTTP reads and routine client tests.</verification>
-  </task>
-  <task id="3" size="M" dependencies="1">
-    <description>Make Needs Shane usable from the Board with pending and resolved views, creation, decision, delegation and completion controls.</description>
-    <acceptance>Controls follow server-resolved actor; pending action remains after approval; retries retain exact payload and key after unknown outcome.</acceptance>
-    <verification>Board interaction tests and local browser render.</verification>
-  </task>
-  <checkpoint>Update contracts, run npm run check, review exact final head, publish through codexslo[bot], verify provider actor/SHA/CI, and open a non-draft PR referencing the accepted Foundation envelope.</checkpoint>
-  <boundary>Each new entry names one existing project or Work Request. Request association derives its project without requiring a new Project. Legacy decision provenance remains explicitly unknown. Delegation records permission for this action without creating an accepted obligation or executing external work.</boundary>
+<implementation_plan issue="https://github.com/workslo/fleet/issues/28" slice="Work Request lifecycle" base="16f38443a907771e7e696e88068c8a37ed14c505">
+  <authorization><shane>Sounds good, proceed :)</shane></authorization>
+  <scope>Decline, withdraw, return, explicit invitation expiry, and blocker conditions across Worker, Board, and native reference client. Existing accepted scope, request/source ownership, Needs Shane, and actor authority stay independent.</scope>
+  <task id="1" size="M"><description>Implement attributed request endings and atomic replay/version enforcement.</description><acceptance>Recipient declines Pending or returns Accepted with reason and unfinished work; requester withdraws Pending. Return discharges only the accepted obligation. Competing outcomes cannot both win.</acceptance><verification>Worker HTTP authority, terminal outcome, evidence, concurrent-write and replay tests.</verification></task>
+  <task id="2" size="M"><description>Attach and clear blockers without changing Accepted state.</description><acceptance>Recipient supplies reason/resolution condition; accepted obligation remains owed. Ending clears current blocker and preserves activity history.</acceptance><verification>Worker HTTP obligations and source-history tests.</verification></task>
+  <task id="3" size="M"><description>Enforce explicitly disclosed invitation deadlines.</description><acceptance>Optional immutable expires_at applies only to Pending acceptance. Due requests reject acceptance; either party may record Expired via versioned POST /expire. Reads expose expiry_due without mutation; accepted work never auto-expires.</acceptance><verification>UTC/calendar validation, deadline boundary, accepted-work survival and expired creation replay tests.</verification></task>
+  <task id="4" size="M" dependencies="1,2,3"><description>Expose lifecycle fields and operations to the routine client.</description><acceptance>Fresh caller authentication, stable retry keys and no cursor movement on mutation; current outcomes and blockers remain in snapshots.</acceptance><verification>Routine interface tests.</verification></task>
+  <task id="5" size="M" dependencies="1,2,3"><description>Add Board controls and truthful outcome displays.</description><acceptance>Actor-specific controls, explicit deadline copy, frozen retry payload/version/key, stale refresh and retained outcome details.</acceptance><verification>Board user-flow tests and actual local Worker browser exercise.</verification></task>
+  <checkpoint>Run npm run check; inspect final diff and outputs; publish scoped branch/PR through codexslo[bot]; review current head via Codex and native Claude identities and verify provider records.</checkpoint>
+  <boundary>No GET side effects, scheduler, work claims, production provisioning/deployment, native credential enrollment, shared production data, or activation. Explicit expiry recording may lag the deadline; expiry_due is visible and acceptance is rejected meanwhile.</boundary>
 </implementation_plan>

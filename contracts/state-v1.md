@@ -26,9 +26,7 @@ Obligation. Silence creates no obligation.
 ## Work Requests
 
 Work Requests use these lifecycle names exactly: `Pending`, `Accepted`,
-`Fulfilled`, `Returned`, `Declined`, `Withdrawn`, and `Expired`. This V1 slice
-exposes only the create, accept, and fulfill transitions; the other endings are
-reserved by the signed agreement and are not implemented here. A request may be
+`Fulfilled`, `Returned`, `Declined`, `Withdrawn`, and `Expired`. A request may be
 associated with an Active Fleet Project or stand alone as bounded ad hoc work.
 A standalone request does not create a Fleet Project and does not import the
 linked personal artifact into Fleet.
@@ -43,6 +41,31 @@ The request and its Evidence remain readable after fulfillment.
 Project association does not alter authority. A standalone request grants no
 project ownership, Shane-only authority, production authority, or authority to
 act as another seat.
+
+Only the recipient may decline a Pending invitation, return Accepted work,
+or record/clear its blocker. Only the requester may withdraw a Pending ask.
+Decline and withdrawal require a reason. Return requires a reason and the
+unfinished portion, with optional evidence. Return ends the recipient's
+obligation; the requester decides what follows and acquires no new obligation
+automatically. Terminal outcomes retain actor, time, explanation and evidence.
+
+A blocker is a condition on Accepted work with a reason and a resolution
+condition. It does not change lifecycle, erase the obligation, or create a
+Needs Shane ask. Unblocking records a summary. Fulfillment or return clears
+the current blocker while its attributed activity remains available.
+
+Optional immutable `expires_at` is an invitation acceptance deadline, not an
+accepted-work delivery deadline. Once it passes, a Pending request exposes
+`expiry_due: true` and rejects acceptance, decline and withdrawal. Either
+participant may explicitly record `Expired`; that outcome records the caller
+as the recorder of the pre-authorized deadline, not a new cancellation choice.
+No expiry is inferred for an undated request; an accepted obligation never
+expires. GET reads do not mutate or advance versions. Until someone records
+expiry, the stored state remains Pending with a visible overdue condition.
+
+Source ownership, accepted scope and related Needs Shane records do not change
+when a request ends. Legacy records gain nullable lifecycle fields without
+invented deadlines, blockers or ending provenance.
 
 ## Pull Candidates and project-owner work
 

@@ -1,3 +1,5 @@
+import type { RequestLifecycleFields, RequestTransition, EndRequestInput, ReturnRequestInput, BlockRequestInput, UnblockRequestInput } from "../../contracts/request-lifecycle";
+export type { RequestTransition, EndRequestInput, ReturnRequestInput, BlockRequestInput, UnblockRequestInput } from "../../contracts/request-lifecycle";
 import type { NeedsShane, CreateNeedsShane, RecordDecision, CompleteAction, DelegateAction } from "../../contracts/needs-shane";
 export type { NeedsShane, CreateNeedsShane, RecordDecision, CompleteAction, DelegateAction } from "../../contracts/needs-shane";
 export type ActorRef = { id: string };
@@ -48,7 +50,7 @@ export type ProjectCard = {
   updated_at: string;
 };
 
-export type WorkRequest = {
+export type WorkRequest = Partial<RequestLifecycleFields> & {
   needs_shane?: NeedsShane[];
   id: string;
   project_id: string | null;
@@ -95,7 +97,7 @@ export type Decision = NeedsShane;
 type ApiErrorBody = { error?: string; message?: string };
 
 export class FleetApiError extends Error {
-  constructor(message: string, readonly status: number) {
+  constructor(message: string, readonly status: number, readonly reportedGlobally = false) {
     super(message);
     this.name = "FleetApiError";
   }
@@ -147,6 +149,7 @@ export class FleetApi {
     title: string;
     detail: string;
     artifact?: Evidence;
+    expires_at?: string | null;
   }, idempotencyKey: string): Promise<WorkRequest> {
     return this.post("/v1/requests", input, undefined, idempotencyKey);
   }
@@ -157,6 +160,10 @@ export class FleetApi {
 
   async fulfillRequest(requestId: string, version: number, evidence: Evidence[], idempotencyKey: string): Promise<WorkRequest> {
     return this.post(`/v1/requests/${encodeURIComponent(requestId)}/fulfill`, { evidence }, version, idempotencyKey);
+  }
+
+  async transitionRequest(requestId: string, version: number, transition: RequestTransition, input: EndRequestInput | ReturnRequestInput | BlockRequestInput | UnblockRequestInput | Record<string, never>, key: string): Promise<WorkRequest> {
+    return this.post(`/v1/requests/${encodeURIComponent(requestId)}/${transition}`, input, version, key);
   }
 
   private async get<T>(path: string): Promise<T> {

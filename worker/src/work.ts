@@ -1,3 +1,4 @@
+import type { RequestBlocker, RequestResolution, RequestEnding, RequestTransition } from "../../contracts/request-lifecycle";
 import { error, isResponse, json, requestJson } from "./http";
 import { decisionsForActor, decisionsForSource } from "./decisions";
 import { principalValues } from "./types";
@@ -14,7 +15,7 @@ type IdempotencyRecord = {
 type EvidenceInput = { uri: string; summary: string };
 type EvidenceRow = EvidenceInput & { created_at: string };
 type ArtifactInput = { uri: string; summary: string };
-type RequestInput = { project_id?: string | null; recipient_id: string; title: string; detail: string; artifact?: ArtifactInput };
+type RequestInput = { project_id?: string | null; recipient_id: string; title: string; detail: string; artifact?: ArtifactInput; expires_at?: string | null };
 type PullCandidateInput = { project_id: string; title: string; detail: string };
 
 function object(value: unknown): value is Record<string, unknown> {
@@ -40,12 +41,20 @@ function requestInput(value: unknown): RequestInput | null {
     object(artifact) && httpUri(artifact.uri) &&
     typeof artifact.summary === "string" && artifact.summary.trim().length > 0
   );
+  const validExpiry = input.expires_at === undefined || input.expires_at === null || invitationDeadline(input.expires_at) !== null;
   const validProject = input.project_id === undefined || input.project_id === null || (typeof input.project_id === "string" && input.project_id.trim().length > 0);
-  return validProject && typeof input.recipient_id === "string" && input.recipient_id.trim().length > 0 &&
+  return validExpiry && validProject && typeof input.recipient_id === "string" && input.recipient_id.trim().length > 0 &&
     typeof input.title === "string" && input.title.trim().length > 0 &&
     typeof input.detail === "string" && input.detail.trim().length > 0 && validArtifact
     ? input as RequestInput
     : null;
+}
+
+function invitationDeadline(value: unknown): string | null {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value)) return null;
+  const normalized = value.includes(".") ? value : value.replace("Z", ".000Z");
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) && date.toISOString() === normalized ? normalized : null;
 }
 
 function pullCandidateInput(value: unknown): PullCandidateInput | null {
@@ -121,7 +130,7 @@ function artifact(row: WorkRequestRow): ArtifactInput | null {
     : null;
 }
 
-function acceptedScope(row: WorkRequestRow): { title: string; detail: string; artifact: ArtifactInput | null } | null {
+function acceptedScope(row: WorkRequestRow): { title: string; detail: string; artifact: ArtifactInput | null; expires_at?: string } | null {
   return row.accepted_scope_json
     ? JSON.parse(row.accepted_scope_json) as { title: string; detail: string; artifact: ArtifactInput | null }
     : null;
@@ -141,6 +150,11 @@ function requestResponse(row: WorkRequestRow, evidence?: EvidenceRow[]) {
     version: row.version,
     accepted_at: row.accepted_at,
     fulfilled_at: row.fulfilled_at,
+    expires_at: row.expires_at,
+    expiry_due: row.state === "Pending" && row.expires_at !== null && row.expires_at <= new Date().toISOString(),
+    ended_at: row.ended_at,
+    resolution: row.resolution_json ? JSON.parse(row.resolution_json) as RequestResolution : null,
+    blocker: row.blocker_json ? JSON.parse(row.blocker_json) as RequestBlocker : null,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -176,20 +190,22 @@ export async function createRequest(request: Request, env: Env, caller: Actor, r
   if (!await activeActor(env, input.recipient_id)) return error("invalid_request", "recipient_id must be an active actor", 400);
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
+  const expiresAt = input.expires_at == null ? null : invitationDeadline(input.expires_at);
+  if (expiresAt !== null && expiresAt <= now) return error("invalid_request", "expires_at must be a future UTC invitation acceptance deadline", 400);
   const stored: WorkRequestRow = {
     id, project_id: projectId, requester_id: caller.id, recipient_id: input.recipient_id, title: input.title, detail: input.detail,
     artifact_uri: input.artifact?.uri ?? null, artifact_summary: input.artifact?.summary ?? null, accepted_scope_json: null,
-    state: "Pending", version: 1, accepted_at: null, fulfilled_at: null, created_at: now, updated_at: now,
+    state: "Pending", version: 1, accepted_at: null, fulfilled_at: null, expires_at: expiresAt, resolution_json: null, blocker_json: null, ended_at: null, created_at: now, updated_at: now,
   };
   const responseBody = JSON.stringify(requestResponse(stored));
   try {
     await env.DB.batch([
-      env.DB.prepare("INSERT INTO work_requests (id, project_id, requester_id, recipient_id, title, detail, artifact_uri, artifact_summary, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(id, projectId, caller.id, input.recipient_id, input.title, input.detail, input.artifact?.uri ?? null, input.artifact?.summary ?? null, now, now),
+      env.DB.prepare("INSERT INTO work_requests (id, project_id, requester_id, recipient_id, title, detail, artifact_uri, artifact_summary, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(id, projectId, caller.id, input.recipient_id, input.title, input.detail, input.artifact?.uri ?? null, input.artifact?.summary ?? null, expiresAt, now, now),
       env.DB.prepare(
         `INSERT INTO activity_events
           (project_id, request_id, actor_id, principal_provider, principal_issuer, principal_kind, principal_subject, type, payload_json, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, 'work_request.created', ?, ?)`,
-      ).bind(projectId, id, caller.id, ...principalValues(caller), JSON.stringify({ request_id: id, recipient_id: input.recipient_id }), now),
+      ).bind(projectId, id, caller.id, ...principalValues(caller), JSON.stringify({ request_id: id, recipient_id: input.recipient_id, ...(expiresAt ? { expires_at: expiresAt } : {}) }), now),
       idempotencyStatement(env, caller, request, idempotency, 201, responseBody),
     ]);
   } catch {
@@ -199,95 +215,112 @@ export async function createRequest(request: Request, env: Env, caller: Actor, r
   return storedResponse(responseBody, 201);
 }
 
-export async function acceptRequest(request: Request, env: Env, caller: Actor, requestId: string): Promise<Response> {
-  const body = await requestJson(request);
-  if (isResponse(body)) return body;
-  if (!object(body) || Object.keys(body).length !== 0) return error("invalid_request", "request acceptance does not accept fields", 400);
-  const version = expectedVersion(request);
-  if (isResponse(version)) return version;
-  const idempotency = await priorReplay(env, caller, request, body);
-  if (isResponse(idempotency)) return idempotency;
-  const current = await workRequest(env, requestId);
-  if (!current) return error("not_found", "work request does not exist", 404);
-  if (current.recipient_id !== caller.id) return error("forbidden", "only the recipient may accept a work request", 403);
-  if (current.version !== version) return error("precondition_failed", "work request version is stale", 412);
-  if (current.state !== "Pending") return error("conflict", "work request is not pending", 409);
-  const now = new Date().toISOString();
-  const acceptedScopeJson = JSON.stringify({ title: current.title, detail: current.detail, artifact: artifact(current) });
-  const responseBody = JSON.stringify(requestResponse({ ...current, accepted_scope_json: acceptedScopeJson, state: "Accepted", version: version + 1, accepted_at: now, updated_at: now }));
-  let transition: D1Result<unknown> | undefined;
-  let replay: D1Result<unknown> | undefined;
-  try {
-    const results = await env.DB.batch([
-      env.DB.prepare(
-        `INSERT INTO activity_events
-          (project_id, request_id, actor_id, principal_provider, principal_issuer, principal_kind, principal_subject, type, payload_json, created_at)
-         SELECT project_id, id, ?, ?, ?, ?, ?, 'work_request.accepted', ?, ?
-           FROM work_requests
-          WHERE id = ? AND recipient_id = ? AND version = ? AND state = 'Pending'`,
-      ).bind(caller.id, ...principalValues(caller), JSON.stringify({ request_id: requestId }), now, requestId, caller.id, version),
-      env.DB.prepare(
-        "INSERT INTO idempotency_records (actor_id, idempotency_key, method, path, request_hash, response_status, response_body) SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM work_requests WHERE id = ? AND recipient_id = ? AND version = ? AND state = 'Pending')",
-      ).bind(caller.id, idempotency.key, request.method, new URL(request.url).pathname, idempotency.hash, 200, responseBody, requestId, caller.id, version),
-      env.DB.prepare("UPDATE work_requests SET state = 'Accepted', accepted_scope_json = ?, accepted_at = ?, version = version + 1, updated_at = ? WHERE id = ? AND recipient_id = ? AND version = ? AND state = 'Pending'").bind(acceptedScopeJson, now, now, requestId, caller.id, version),
-    ]);
-    transition = results[2];
-    replay = results[1];
-  } catch {
-    return error("internal_error", "work request acceptance was not stored", 500);
+type Transition = RequestTransition | "accept" | "fulfill";
+type TransitionInput = { reason?: string; unfinished_work?: string; resolution_condition?: string; summary?: string; evidence?: EvidenceInput[] };
+
+function transitionInput(action: Transition, body: unknown): TransitionInput | null {
+  if (!object(body)) return null;
+  const fields: Record<Transition, string[]> = {
+    accept: [], fulfill: ["evidence"], decline: ["reason"], withdraw: ["reason"],
+    return: ["reason", "unfinished_work", "evidence"], expire: [],
+    block: ["reason", "resolution_condition"], unblock: ["summary"],
+  };
+  if (Object.keys(body).some((key) => !fields[action].includes(key))) return null;
+  for (const field of fields[action].filter((key) => key !== "evidence")) {
+    if (typeof body[field] !== "string" || !body[field].trim() || body[field].length > 4000) return null;
   }
-  if (transition?.meta.changes !== 1) {
-    const stored = await priorReplay(env, caller, request, body);
-    return isResponse(stored) ? stored : error("conflict", "work request cannot be accepted", 409);
+  if (fields[action].includes("evidence")) {
+    const evidence = fulfillmentEvidence(body);
+    if (!evidence || evidence.length > 20) return null;
+    return { ...body, evidence } as TransitionInput;
   }
-  if (replay?.meta.changes !== 1) return error("internal_error", "work request acceptance response was not stored", 500);
-  return storedResponse(responseBody);
+  return body as TransitionInput;
 }
 
-export async function fulfillRequest(request: Request, env: Env, caller: Actor, requestId: string): Promise<Response> {
+export async function transitionRequest(request: Request, env: Env, caller: Actor, requestId: string, action: Transition): Promise<Response> {
   const body = await requestJson(request);
   if (isResponse(body)) return body;
-  const evidence = fulfillmentEvidence(body);
-  if (!evidence) return error("invalid_request", "fulfillment evidence must be an array of uri and summary records", 400);
+  const input = transitionInput(action, body);
+  if (!input) return error("invalid_request", "supply only the required transition fields, nonblank explanations and valid HTTP evidence", 400);
   const version = expectedVersion(request);
   if (isResponse(version)) return version;
   const idempotency = await priorReplay(env, caller, request, body);
   if (isResponse(idempotency)) return idempotency;
   const current = await workRequest(env, requestId);
   if (!current) return error("not_found", "work request does not exist", 404);
-  if (current.recipient_id !== caller.id) return error("forbidden", "only the recipient may fulfill a work request", 403);
+  const permitted = action === "withdraw" ? current.requester_id === caller.id
+    : action === "expire" ? current.requester_id === caller.id || current.recipient_id === caller.id
+    : current.recipient_id === caller.id;
+  if (!permitted) return error("forbidden", "only the request participant authorized for this transition may record it", 403);
   if (current.version !== version) return error("precondition_failed", "work request version is stale", 412);
-  if (current.state !== "Accepted") return error("conflict", "work request is not accepted", 409);
+  const requiredState = ["accept", "decline", "withdraw", "expire"].includes(action) ? "Pending" : "Accepted";
+  if (current.state !== requiredState) return error("conflict", `work request must be ${requiredState}`, 409);
   const now = new Date().toISOString();
-  const responseBody = JSON.stringify(requestResponse({ ...current, state: "Fulfilled", version: version + 1, fulfilled_at: now, updated_at: now }));
-  let transition: D1Result<unknown> | undefined;
-  let replay: D1Result<unknown> | undefined;
+  const due = current.expires_at !== null && current.expires_at <= now;
+  if (action === "expire" && !due) return error("conflict", "the explicit invitation deadline has not passed", 409);
+  if (requiredState === "Pending" && action !== "expire" && due) return error("conflict", "the invitation deadline has passed; record its expiry", 409);
+  if (action === "unblock" && current.blocker_json === null) return error("conflict", "work request has no current blocker", 409);
+
+  const ending: Partial<Record<Transition, RequestEnding>> = { fulfill: "Fulfilled", return: "Returned", decline: "Declined", withdraw: "Withdrawn", expire: "Expired" };
+  const state = ending[action] ?? (action === "accept" ? "Accepted" : current.state);
+  const evidence = input.evidence ?? [];
+  const resolution: RequestResolution | null = ending[action] ? {
+    state: state as RequestEnding, actor: { id: caller.id }, at: now,
+    reason: action === "expire" ? "The disclosed invitation acceptance deadline passed." : input.reason ?? null,
+    unfinished_work: input.unfinished_work ?? null, evidence,
+  } : null;
+  const blocker: RequestBlocker | null = action === "block" ? {
+    reason: input.reason!, resolution_condition: input.resolution_condition!, actor: { id: caller.id }, at: now,
+  } : null;
+  const acceptedScopeJson = action === "accept" ? JSON.stringify({
+    title: current.title, detail: current.detail, artifact: artifact(current),
+    ...(current.expires_at ? { expires_at: current.expires_at } : {}),
+  }) : current.accepted_scope_json;
+  const changed: WorkRequestRow = {
+    ...current, state, version: version + 1, updated_at: now, accepted_scope_json: acceptedScopeJson,
+    accepted_at: action === "accept" ? now : current.accepted_at,
+    fulfilled_at: action === "fulfill" ? now : current.fulfilled_at,
+    ended_at: resolution ? now : current.ended_at,
+    resolution_json: resolution ? JSON.stringify(resolution) : current.resolution_json,
+    blocker_json: blocker ? JSON.stringify(blocker) : null,
+  };
+  const responseBody = JSON.stringify(requestResponse(changed));
+  const eventType: Record<Transition, string> = {
+    accept: "accepted", fulfill: "fulfilled", decline: "declined", withdraw: "withdrawn",
+    return: "returned", expire: "expired", block: "blocked", unblock: "unblocked",
+  };
+  // Each write observes the same pre-transition row; the guarded update runs last.
+  // A competing ending cannot leave activity, evidence or a replay receipt behind.
+  const predicate = "id = ? AND version = ? AND state = ? AND (expires_at IS NULL OR expires_at > ? OR state = 'Accepted' OR ? = 'expire')";
+  const guard = [requestId, version, requiredState, now, action];
+  const payload = { request_id: requestId,
+    ...(action === "fulfill" || action === "return" ? { evidence_count: evidence.length } : {}),
+    ...(resolution && action !== "fulfill" ? { resolution } : {}),
+    ...(blocker ? { blocker } : {}),
+    ...(action === "unblock" ? { summary: input.summary } : {}),
+    ...(action === "expire" ? { cause: "explicit_expiry", expires_at: current.expires_at, recorded_by: caller.id } : {}),
+  };
   try {
     const results = await env.DB.batch([
-      ...evidence.map((entry) => env.DB.prepare("INSERT INTO evidence_links (project_id, request_id, actor_id, uri, summary, created_at) SELECT project_id, id, ?, ?, ?, ? FROM work_requests WHERE id = ? AND recipient_id = ? AND version = ? AND state = 'Accepted'").bind(caller.id, entry.uri, entry.summary, now, requestId, caller.id, version)),
-      env.DB.prepare(
-        `INSERT INTO activity_events
-          (project_id, request_id, actor_id, principal_provider, principal_issuer, principal_kind, principal_subject, type, payload_json, created_at)
-         SELECT project_id, id, ?, ?, ?, ?, ?, 'work_request.fulfilled', ?, ?
-           FROM work_requests
-          WHERE id = ? AND recipient_id = ? AND version = ? AND state = 'Accepted'`,
-      ).bind(caller.id, ...principalValues(caller), JSON.stringify({ request_id: requestId, evidence_count: evidence.length }), now, requestId, caller.id, version),
-      env.DB.prepare(
-        "INSERT INTO idempotency_records (actor_id, idempotency_key, method, path, request_hash, response_status, response_body) SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM work_requests WHERE id = ? AND recipient_id = ? AND version = ? AND state = 'Accepted')",
-      ).bind(caller.id, idempotency.key, request.method, new URL(request.url).pathname, idempotency.hash, 200, responseBody, requestId, caller.id, version),
-      env.DB.prepare("UPDATE work_requests SET state = 'Fulfilled', fulfilled_at = ?, version = version + 1, updated_at = ? WHERE id = ? AND recipient_id = ? AND version = ? AND state = 'Accepted'").bind(now, now, requestId, caller.id, version),
+      ...evidence.map((entry) => env.DB.prepare(`INSERT INTO evidence_links (project_id, request_id, actor_id, uri, summary, created_at) SELECT project_id, id, ?, ?, ?, ? FROM work_requests WHERE ${predicate}`).bind(caller.id, entry.uri, entry.summary, now, ...guard)),
+      env.DB.prepare(`INSERT INTO activity_events
+        (project_id, request_id, actor_id, principal_provider, principal_issuer, principal_kind, principal_subject, type, payload_json, created_at)
+        SELECT project_id, id, ?, ?, ?, ?, ?, ?, ?, ? FROM work_requests WHERE ${predicate}`)
+        .bind(caller.id, ...principalValues(caller), `work_request.${eventType[action]}`, JSON.stringify(payload), now, ...guard),
+      env.DB.prepare(`INSERT INTO idempotency_records (actor_id, idempotency_key, method, path, request_hash, response_status, response_body)
+        SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM work_requests WHERE ${predicate})`)
+        .bind(caller.id, idempotency.key, request.method, new URL(request.url).pathname, idempotency.hash, 200, responseBody, ...guard),
+      env.DB.prepare(`UPDATE work_requests SET state = ?, accepted_scope_json = ?, accepted_at = ?, fulfilled_at = ?,
+        ended_at = ?, resolution_json = ?, blocker_json = ?, version = version + 1, updated_at = ? WHERE ${predicate}`)
+        .bind(changed.state, changed.accepted_scope_json, changed.accepted_at, changed.fulfilled_at, changed.ended_at, changed.resolution_json, changed.blocker_json, now, ...guard),
     ]);
-    transition = results.at(-1);
-    replay = results.at(-2);
+    if (results.at(-1)?.meta.changes === 1 && results.at(-2)?.meta.changes === 1) return storedResponse(responseBody);
   } catch {
-    return error("internal_error", "work request fulfillment was not stored", 500);
+    const replay = await priorReplay(env, caller, request, body);
+    return isResponse(replay) ? replay : error("internal_error", "work request transition was not stored", 500);
   }
-  if (transition?.meta.changes !== 1) {
-    const stored = await priorReplay(env, caller, request, body);
-    return isResponse(stored) ? stored : error("conflict", "work request cannot be fulfilled", 409);
-  }
-  if (replay?.meta.changes !== 1) return error("internal_error", "work request fulfillment response was not stored", 500);
-  return storedResponse(responseBody);
+  const replay = await priorReplay(env, caller, request, body);
+  return isResponse(replay) ? replay : error("precondition_failed", "work request changed before the transition was recorded; refresh it", 412);
 }
 
 export async function createPullCandidate(request: Request, env: Env, caller: Actor): Promise<Response> {
@@ -389,7 +422,7 @@ export async function myWork(env: Env, caller: Actor, afterValue: string | null)
     obligations: [
       ...accepted.results.map((entry) => {
         const scope = acceptedScope(entry);
-        return { source: "accepted_request", request_id: entry.id, project_id: entry.project_id, title: scope?.title ?? entry.title, detail: scope?.detail ?? entry.detail };
+        return { source: "accepted_request", request_id: entry.id, project_id: entry.project_id, title: scope?.title ?? entry.title, detail: scope?.detail ?? entry.detail, blocker: entry.blocker_json ? JSON.parse(entry.blocker_json) as RequestBlocker : null };
       }),
       ...ownedProjects.results.map((project) => ({ source: "owner_next_action", project_id: project.id, title: "Project owner next action", detail: project.next_action })),
     ],

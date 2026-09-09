@@ -1,4 +1,6 @@
-- [x] Task 1: Needs Shane persistence and lifecycle (M) — deps: none
-- [x] Task 2: Source work and native reconciliation (M) — deps: 1
-- [x] Task 3: Needs Shane Board actions (M) — deps: 1
+- [x] Task 1: Attributed request endings (M)
+- [x] Task 2: Blocker conditions (M)
+- [x] Task 3: Explicit invitation expiry (M)
+- [x] Task 4: Native lifecycle operations (M) — deps: 1,2,3
+- [x] Task 5: Board lifecycle controls (M) — deps: 1,2,3
 - [ ] Final verification, reviews and PR delivery

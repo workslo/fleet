@@ -64,6 +64,10 @@ export type WorkRequestRow = {
   version: number;
   accepted_at: string | null;
   fulfilled_at: string | null;
+  expires_at: string | null;
+  resolution_json: string | null;
+  blocker_json: string | null;
+  ended_at: string | null;
   created_at: string;
   updated_at: string;
 };
