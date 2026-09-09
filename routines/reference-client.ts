@@ -27,6 +27,8 @@
 import { buildAuthHeaders, type ReferenceClientAuth } from "./access-auth";
 import type { CompleteAction, CreateNeedsShane, DelegateAction, NeedsShane, RecordDecision } from "../contracts/needs-shane";
 export type { CompleteAction, CreateNeedsShane, DelegateAction, NeedsShane, RecordDecision } from "../contracts/needs-shane";
+import type { BlockRequestInput, EndRequestInput, RequestBlocker, RequestLifecycleFields, ReturnRequestInput, UnblockRequestInput } from "../contracts/request-lifecycle";
+export type { BlockRequestInput, EndRequestInput, RequestBlocker, RequestLifecycleFields, RequestResolution, ReturnRequestInput, UnblockRequestInput } from "../contracts/request-lifecycle";
 
 // ---------------------------------------------------------------------------
 // Contract types — matching contracts/http-v1.md
@@ -49,6 +51,7 @@ export interface Obligation {
   source: "accepted_request" | "owner_next_action";
   request_id?: string;
   project_id: string | null;
+  blocker?: RequestBlocker | null;
 }
 
 export interface EvidenceLink {
@@ -63,9 +66,10 @@ export interface AcceptedRequestScope {
   title: string;
   detail: string;
   artifact: ArtifactLink | null;
+  expires_at?: string | null;
 }
 
-export interface WorkRequestSummary {
+export interface WorkRequestSummary extends Partial<RequestLifecycleFields> {
   needs_shane?: NeedsShane[];
   id: string;
   project_id: string | null;
@@ -345,6 +349,35 @@ export class FleetRoutineClient {
     );
   }
 
+  /** Decline a pending invitation without creating an obligation. */
+  async declineRequest(requestId: string, version: number, idempotencyKey: string, input: EndRequestInput): Promise<WorkRequestSummary> {
+    return this.mutate(`/v1/requests/${encodeURIComponent(requestId)}/decline`, version, input, idempotencyKey);
+  }
+
+  /** Withdraw a pending invitation sent by this agent. */
+  async withdrawRequest(requestId: string, version: number, idempotencyKey: string, input: EndRequestInput): Promise<WorkRequestSummary> {
+    return this.mutate(`/v1/requests/${encodeURIComponent(requestId)}/withdraw`, version, input, idempotencyKey);
+  }
+
+  /** End an accepted obligation and disclose the unfinished work. */
+  async returnRequest(requestId: string, version: number, idempotencyKey: string, input: ReturnRequestInput): Promise<WorkRequestSummary> {
+    return this.mutate(`/v1/requests/${encodeURIComponent(requestId)}/return`, version, input, idempotencyKey);
+  }
+
+  /** Attach a blocker while retaining the accepted obligation. */
+  async blockRequest(requestId: string, version: number, idempotencyKey: string, input: BlockRequestInput): Promise<WorkRequestSummary> {
+    return this.mutate(`/v1/requests/${encodeURIComponent(requestId)}/block`, version, input, idempotencyKey);
+  }
+
+  async unblockRequest(requestId: string, version: number, idempotencyKey: string, input: UnblockRequestInput): Promise<WorkRequestSummary> {
+    return this.mutate(`/v1/requests/${encodeURIComponent(requestId)}/unblock`, version, input, idempotencyKey);
+  }
+
+  /** Explicitly record a due invitation expiry; the server enforces its deadline. */
+  async expireRequest(requestId: string, version: number, idempotencyKey: string): Promise<WorkRequestSummary> {
+    return this.mutate(`/v1/requests/${encodeURIComponent(requestId)}/expire`, version, {}, idempotencyKey);
+  }
+
   /**
    * Create a Work Request to another agent. Creates no obligation until the
    * recipient explicitly accepts.
@@ -354,6 +387,7 @@ export class FleetRoutineClient {
    * @param title        Short title.
    * @param detail       Full description of the ask.
    * @param idempotencyKey  Reuse the same key for retries.
+   * @param expiresAt    Optional immutable deadline for accepting the invitation; accepted work does not expire.
    */
   async createWorkRequest(
     projectId: string,
@@ -361,11 +395,14 @@ export class FleetRoutineClient {
     title: string,
     detail: string,
     idempotencyKey: string,
+    expiresAt?: string,
   ): Promise<WorkRequestSummary> {
+    const body: Record<string, unknown> = { recipient_id: recipientId, title, detail };
+    if (expiresAt !== undefined) body.expires_at = expiresAt;
     return this.mutate<WorkRequestSummary>(
       `/v1/projects/${encodeURIComponent(projectId)}/requests`,
       undefined,
-      { recipient_id: recipientId, title, detail },
+      body,
       idempotencyKey,
     );
   }
@@ -373,6 +410,7 @@ export class FleetRoutineClient {
   /**
    * Create a bounded Work Request without a Fleet Project. The caller shares
    * only the supplied artifact link; personal-work contents remain in place.
+   * The optional final deadline limits acceptance only, never accepted work.
    */
   async createStandaloneRequest(
     recipientId: string,
@@ -380,9 +418,11 @@ export class FleetRoutineClient {
     detail: string,
     idempotencyKey: string,
     artifact?: ArtifactLink,
+    expiresAt?: string,
   ): Promise<WorkRequestSummary> {
     const body: Record<string, unknown> = { recipient_id: recipientId, title, detail };
     if (artifact !== undefined) body.artifact = artifact;
+    if (expiresAt !== undefined) body.expires_at = expiresAt;
     return this.mutate<WorkRequestSummary>(
       "/v1/requests",
       undefined,
