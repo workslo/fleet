@@ -43,3 +43,12 @@ production Access client. Its retired one-header test identity cannot satisfy
 the normal two-header service-token exchange. Native integration and proof are
 separately gated; follow `docs/onboarding/cloudflare-access.md` and do not add a
 bearer or OAuth identity fallback.
+
+The reference client exposes declineRequest, withdrawRequest, returnRequest,
+blockRequest, unblockRequest and expireRequest. These use the same authenticated
+Worker mutation seam and never advance the native cursor. Creation methods may
+supply a final expiresAt argument for the disclosed invitation deadline.
+Reconciliation retains current resolution/blocker/expiry fields but remains
+read-only. When a Pending record reports expiry_due, either participant may use
+expireRequest to record the already-disclosed deadline with a stable retry key.
+It must not accept overdue invitations or expire an accepted obligation.

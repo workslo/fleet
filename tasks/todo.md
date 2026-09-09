@@ -1,6 +1,6 @@
-- [ ] Task 1: Attributed request endings (M)
-- [ ] Task 2: Blocker conditions (M)
-- [ ] Task 3: Explicit invitation expiry (M)
-- [ ] Task 4: Native lifecycle operations (M) — deps: 1,2,3
-- [ ] Task 5: Board lifecycle controls (M) — deps: 1,2,3
+- [x] Task 1: Attributed request endings (M)
+- [x] Task 2: Blocker conditions (M)
+- [x] Task 3: Explicit invitation expiry (M)
+- [x] Task 4: Native lifecycle operations (M) — deps: 1,2,3
+- [x] Task 5: Board lifecycle controls (M) — deps: 1,2,3
 - [ ] Final verification, reviews and PR delivery

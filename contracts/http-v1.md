@@ -206,3 +206,54 @@ Both `evidence` and `activity` on the card are capped at the 20 newest
 records, newest first. Full activity history pages through
 `GET /v1/activity?after=<cursor>`. Evidence links currently have no paging
 endpoint; the card's 20-record window is their only read surface.
+
+## Work Request endings, blockers and invitation expiry
+
+Creation accepts optional `expires_at` (null or absent means no deadline).
+Supply an exact UTC timestamp `YYYY-MM-DDTHH:mm:ss[.sss]Z`; calendar-invalid
+values and past deadlines on new requests fail with 400. It is normalized to
+millisecond UTC and cannot be amended after creation. A successful creation's
+retry recovers the original response even after that deadline has passed.
+The disclosed deadline remains on the source and, when present, in accepted scope.
+
+Request detail, mutation responses and inbound/outbound snapshots include:
+`expires_at`, `expiry_due`, `ended_at`, `resolution` and `blocker`.
+Resolution includes state, actual recording actor/time, nullable reason and
+unfinished_work, and evidence. A blocker includes reason, resolution_condition,
+and actual actor/time. Legacy outcome provenance is null. Accepted obligations
+also expose their current blocker. These facts persist after cursor advancement.
+
+All transitions use `POST /v1/requests/:id/<action>`, the current quoted
+`If-Match` version and `Idempotency-Key`:
+
+| Action | Authorized caller and current state | Body |
+| --- | --- | --- |
+| `decline` | Recipient, Pending before deadline | `{reason}` |
+| `withdraw` | Requester, Pending before deadline | `{reason}` |
+| `return` | Recipient, Accepted | `{reason, unfinished_work, evidence?}` |
+| `block` | Recipient, Accepted | `{reason, resolution_condition}` |
+| `unblock` | Recipient, Accepted with blocker | `{summary}` |
+| `expire` | Requester or recipient, Pending with passed explicit deadline | `{}` |
+
+`accept` and `fulfill` retain their existing API shapes. Fulfillment now records
+an attributed resolution and clears any current blocker. Replacing a blocker
+records another attributed blocker event. Each explanation is nonblank and at
+most 4,000 characters. Return and fulfillment evidence permit at most 20 HTTP(S)
+links with nonblank summaries. Unknown transition fields fail closed.
+
+Stale versions and competing transitions return 412; invalid current state,
+premature expiry, or an elapsed invitation deadline return 409. Successful
+same-key retries return the original recorded response even if the request has
+since advanced. Different payloads under that key return idempotency_conflict.
+Mutations never alter accepted scope or independently resolve Needs Shane.
+
+Expiry is explicit: GET has no side effects and there is no scheduler in this
+slice. At the server-evaluated time `now >= expires_at`, reads show expiry_due
+and Pending acceptance/decline/withdrawal fail until a participant records expiry.
+The Board exposes Record expiry; routines can call expireRequest. Accepted work
+never expires. An overdue Pending record is not a new obligation.
+
+The Board refreshes current request/work snapshots after version/state conflicts
+before another explicit attempt. Unknown outcomes retain the original payload,
+version and key across retries and navigation within the app. A full page reload
+still discards in-memory attempts: reconcile source state before replacing one.

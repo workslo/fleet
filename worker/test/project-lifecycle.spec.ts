@@ -1,6 +1,6 @@
 import { env, exports } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
-import { accessHeaders } from "./access-fixture";
+import { accessHeaders, testAccessIssuer } from "./access-fixture";
 
 type RequestOptions = {
   body?: unknown;
@@ -317,7 +317,7 @@ describe("Fleet project lifecycle", () => {
   it("caps the card embed at the 20 newest evidence links and activity events", async () => {
     const project = await proposeProject();
     const inserts = Array.from({ length: 25 }, (_, i) => [
-      env.DB.prepare("INSERT INTO activity_events (project_id, actor_id, type, payload_json) VALUES (?, 'shane', ?, '{}')").bind(project.id, `test.event_${i}`),
+      env.DB.prepare("INSERT INTO activity_events (project_id, actor_id, type, payload_json, principal_provider, principal_issuer, principal_kind, principal_subject) VALUES (?, 'shane', ?, '{}', 'cloudflare_access', ?, 'human', 'test-human-shane')").bind(project.id, `test.event_${i}`, testAccessIssuer),
       env.DB.prepare("INSERT INTO evidence_links (project_id, actor_id, uri, summary) VALUES (?, 'shane', ?, ?)").bind(project.id, `https://fleet.test/evidence-${i}`, `evidence ${i}`),
     ]).flat();
     await env.DB.batch(inserts);

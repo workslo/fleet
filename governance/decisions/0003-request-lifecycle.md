@@ -1,0 +1,8 @@
+<implementation_decision id="0003" subject="Work Request endings and invitation expiry" source="https://github.com/workslo/fleet/issues/28">
+  <scope_summary>Complete request decline, withdrawal, return, explicit expiry and blocked status.</scope_summary>
+  <authorization><shane>Sounds good, proceed :)</shane></authorization>
+  <basis>The signed agreement distinguishes Pending, Accepted and terminal request states. It preserves obligations while blocked and requires an explicit expiry before time may end an invitation.</basis>
+  <implementation_choice>Optional immutable expires_at is the pending invitation acceptance deadline. It does not grant a deadline on accepted work. At the deadline, Pending requests expose expiry_due and cannot accept, decline or withdraw; either participant records expiry through an authenticated versioned POST. Reads remain side-effect free and overdue records remain visibly Pending until expiry is recorded. This avoids invented system principals and a new scheduler.</implementation_choice>
+  <authority>The recipient declines pending work, returns accepted work with its unfinished portion and reason, and records or clears a blocker. The requester withdraws pending work. Return ends the accepted obligation without creating one for the requester. Authenticated identity, timestamp, scope, evidence and replay semantics remain explicit.</authority>
+  <preserved_boundary>Source ownership and Needs Shane outcomes remain independent. The signed agreement is unchanged. Production deployment, credentials, shared production data, native proof, and Product V1 activation retain their gates.</preserved_boundary>
+</implementation_decision>

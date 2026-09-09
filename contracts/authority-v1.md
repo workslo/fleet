@@ -63,3 +63,12 @@ Decision outcomes document the bounded ask; they do not bypass the existing
 Project authorization, cancellation, final-acceptance or production gates.
 Recording an action does not perform it. Its summary and evidence state what
 was done under the applicable authority.
+
+For request endings, the recipient alone declines Pending asks or returns
+Accepted work; the requester alone withdraws Pending asks. The recipient alone
+records or clears blockers on Accepted work. Shane has no cross-seat override.
+Either request participant may record expiry after its originally disclosed
+invitation deadline. Accepted work cannot be withdrawn or expired in this slice.
+All these operations preserve the authenticated actor and principal, require
+quoted If-Match and an actor-scoped idempotency key, and atomically store the
+state change, evidence, activity and replay response.
