@@ -1,3 +1,4 @@
+import { NeedsShaneOutcomes } from "./DecisionsView";
 import type { ActorRef, ProjectCard } from "../api";
 import { ProjectEvidencePanel } from "../components/ProjectEvidencePanel";
 
@@ -42,6 +43,7 @@ export function ProjectView({ project, onBack }: { project: ProjectCard; onBack:
         ) : <p>No authorized envelope has been recorded.</p>}
       </section>
 
+      {project.needs_shane?.length ? <section aria-label="Project Needs Shane records"><h2>Needs Shane</h2><NeedsShaneOutcomes entries={project.needs_shane} /></section> : null}
       <ProjectEvidencePanel evidence={project.evidence} />
     </article>
   );

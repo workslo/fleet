@@ -1,3 +1,4 @@
+import { NeedsShaneOutcomes } from "./DecisionsView";
 import { useState, type FormEvent } from "react";
 import type { AgentWorkSnapshot, Evidence, WorkRequest } from "../api";
 
@@ -42,6 +43,7 @@ export function MyWorkView({ work, requestDetails, busy, onCreate, onAccept, onF
       </section>
       <RequestList heading="Outbound requests" requests={work.outbound_requests} requestDetails={requestDetails} empty="No outbound requests have been made." busy={busy} onView={onView} />
       <RequestList heading="Inbound requests" requests={work.inbound_requests} requestDetails={requestDetails} empty="No inbound requests need attention." busy={busy} onAccept={onAccept} onFulfill={onFulfill} onView={onView} />
+      {work.needs_shane?.length ? <section aria-label="Related Needs Shane records"><h2>Related Needs Shane records</h2><NeedsShaneOutcomes entries={work.needs_shane} /></section> : null}
       <PullCandidateList candidates={work.pull_candidates} />
     </section>
   );
@@ -108,6 +110,7 @@ function RequestList({ heading, requests, requestDetails, empty, busy, onAccept,
             {resolvedRequest.artifact ? <p>Artifact: <a href={resolvedRequest.artifact.uri}>{resolvedRequest.artifact.summary}</a></p> : null}
             {resolvedRequest.accepted_scope ? <p>Accepted scope: {resolvedRequest.accepted_scope.detail}</p> : null}
             {resolvedRequest.evidence?.length ? <ul>{resolvedRequest.evidence.map((entry) => <li key={`${entry.uri}-${entry.summary}`}><a href={entry.uri}>{entry.summary}</a></li>)}</ul> : null}
+            {resolvedRequest.needs_shane?.length ? <NeedsShaneOutcomes entries={resolvedRequest.needs_shane} /> : null}
             <button type="button" disabled={busy} onClick={() => void onView(resolvedRequest)}>View {resolvedRequest.title}</button>
             {onAccept && resolvedRequest.state === "Pending" ? <AcceptButton request={resolvedRequest} busy={busy} onAccept={onAccept} /> : null}
             {onFulfill && resolvedRequest.state === "Accepted" ? <FulfillForm request={resolvedRequest} busy={busy} onFulfill={onFulfill} /> : null}

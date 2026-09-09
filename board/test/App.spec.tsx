@@ -109,8 +109,8 @@ describe("Fleet Board", () => {
     expect(await screen.findByText("No Fleet Projects are visible yet. Shared project records will appear here.")).toBeVisible();
     await userEvent.click(screen.getByRole("link", { name: "Pull Candidates" }));
     expect(await screen.findByText("No Pull Candidates have been published. Published Pulls remain voluntary and create no obligation.")).toBeVisible();
-    await userEvent.click(screen.getByRole("link", { name: "Decisions" }));
-    expect(await screen.findByText("No decisions need Shane’s attention.")).toBeVisible();
+    await userEvent.click(screen.getByRole("link", { name: "Needs Shane" }));
+    expect(await screen.findByText("No decisions or actions need Shane’s attention.")).toBeVisible();
 
     cleanup();
     vi.stubGlobal("fetch", vi.fn(() => response({ error: "unavailable", message: "Fleet is unavailable" }, 503)));

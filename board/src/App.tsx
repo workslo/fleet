@@ -98,6 +98,23 @@ export function App() {
     }
   }, [api]);
 
+  const runNeedsShaneAction = useCallback(async (action: () => Promise<Decision>) => {
+    const changed = await action();
+    setData((current) => ({ ...current, decisions: [...current.decisions.filter((entry) => entry.id !== changed.id), changed] }));
+    setRequestDetails((current) => {
+      const source = changed.work_request_id ? current[changed.work_request_id] : undefined;
+      return source ? { ...current, [source.id]: { ...source, needs_shane: [...(source.needs_shane ?? []).filter((entry) => entry.id !== changed.id), changed] } } : current;
+    });
+    setSelectedProject((current) => current?.id === changed.project_id
+      ? { ...current, needs_shane: [...(current.needs_shane ?? []).filter((entry) => entry.id !== changed.id), changed] } : current);
+    try {
+      const work = await api.myWork();
+      setData((current) => ({ ...current, work }));
+    } catch {
+      setError({ message: "The action was recorded, but current work could not be refreshed. Retry loading current work.", scope: "global" });
+    }
+  }, [api]);
+
   const loadRequest = useCallback(async (requestId: string) => {
     setActionPending(true);
     setError(null);
@@ -122,7 +139,7 @@ export function App() {
           <a href="#portfolio" aria-current={view === "portfolio" ? "page" : undefined} onClick={(event) => { event.preventDefault(); setView("portfolio"); }}>Portfolio</a>
           <a href="#my-work" aria-current={view === "my-work" ? "page" : undefined} onClick={(event) => { event.preventDefault(); setView("my-work"); }}>My Work</a>
           <a href="#pull-candidates" aria-current={view === "pull-candidates" ? "page" : undefined} onClick={(event) => { event.preventDefault(); setView("pull-candidates"); }}>Pull Candidates</a>
-          <a href="#decisions" aria-current={view === "decisions" ? "page" : undefined} onClick={(event) => { event.preventDefault(); setView("decisions"); }}>Decisions</a>
+          <a href="#decisions" aria-current={view === "decisions" ? "page" : undefined} onClick={(event) => { event.preventDefault(); setView("decisions"); }}>Needs Shane</a>
         </nav>
       </header>
       <main>
@@ -144,7 +161,13 @@ export function App() {
           />
         ) : null}
         {!loading && view === "pull-candidates" ? <PullCandidatesView candidates={data.work.pull_candidates} /> : null}
-        {!loading && view === "decisions" ? <DecisionsView decisions={data.decisions} /> : null}
+        {!loading && view === "decisions" ? <DecisionsView decisions={data.decisions} actorId={data.identity?.actor.id ?? ""}
+          onHistory={async () => { const history = await api.decisions(true); setData((current) => ({ ...current, decisions: history.decisions })); }}
+          onCreate={(input, key) => runNeedsShaneAction(() => api.createNeedsShane(input, key))}
+          onDecide={(id, version, input, key) => runNeedsShaneAction(() => api.decide(id, version, input, key))}
+          onComplete={(id, version, input, key) => runNeedsShaneAction(() => api.completeAction(id, version, input, key))}
+          onDelegate={(id, version, input, key) => runNeedsShaneAction(() => api.delegateAction(id, version, input, key))}
+        /> : null}
       </main>
     </div>
   );
