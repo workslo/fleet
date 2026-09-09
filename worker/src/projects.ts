@@ -118,8 +118,8 @@ async function card(env: Env, row: ProjectRow, includeNeedsShane = true) {
   const results = await env.DB.batch([
     env.DB.prepare("SELECT revision, outcome, scope_json, exclusions_json, delegated_actions_json, gates_json, validation_evidence_json FROM project_envelope_revisions WHERE project_id = ? ORDER BY revision DESC LIMIT 1").bind(row.id),
     env.DB.prepare("SELECT revision, body FROM plan_revisions WHERE project_id = ? ORDER BY revision DESC LIMIT 1").bind(row.id),
-    env.DB.prepare("SELECT uri, summary, created_at FROM evidence_links WHERE project_id = ? ORDER BY id DESC").bind(row.id),
-    env.DB.prepare("SELECT activity_events.type, activity_events.created_at, actors.id AS actor_id FROM activity_events JOIN actors ON actors.id = activity_events.actor_id WHERE project_id = ? ORDER BY activity_events.id DESC").bind(row.id),
+    env.DB.prepare("SELECT uri, summary, created_at FROM evidence_links WHERE project_id = ? ORDER BY id DESC LIMIT 20").bind(row.id),
+    env.DB.prepare("SELECT activity_events.type, activity_events.created_at, actors.id AS actor_id FROM activity_events JOIN actors ON actors.id = activity_events.actor_id WHERE project_id = ? ORDER BY activity_events.id DESC LIMIT 20").bind(row.id),
   ]);
   const envelope = results[0];
   const plan = results[1];
