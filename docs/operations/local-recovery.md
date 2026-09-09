@@ -14,11 +14,17 @@ npm ci
 npm run recovery:rehearse
 ```
 
-The command runs the actual Worker against a disposable local D1 database,
+The command bundles the actual Worker source locally with esbuild and runs it
+against a disposable local D1 database. It uses this local bundle, rather than
+the Wrangler deployment artifact. It
 creates representative shared work through authenticated HTTP requests, exports
 the database with the installed Wrangler, and imports the SQL into a separate
 clean local database. It then checks the restored state and behavior. No
 Cloudflare account login or participant credential is needed.
+
+The runner checks installed Wrangler, esbuild and Miniflare versions against the
+lockfile and records them in the receipt. The latter two come from the existing
+dependency tree; a future toolchain update may require adapting this rehearsal.
 
 Every invocation writes a fresh directory under `recovery-runs/` in this
 checkout. The command prints that directory and the outcome. Keep its
@@ -63,7 +69,10 @@ the Board; an agent's run does not establish that Shane performed the rehearsal.
 ## Failure and scope
 
 A failed assertion or command makes the rehearsal exit unsuccessfully. Preserve
-the failed run directory for diagnosis. Run again to obtain fresh databases;
+the failed run directory for diagnosis. Its `failure.json` records the stage and
+the runner's assertion reason; external error content is withheld. Directories
+containing `helper-test.json` are helper-test fixtures, not rehearsal results.
+Run again to obtain fresh databases;
 do not turn a failed receipt into a passing one by editing its fields.
 
 The runner accepts only `--serve`. It has no remote mode, existing-database

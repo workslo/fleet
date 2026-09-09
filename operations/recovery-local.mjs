@@ -3,8 +3,15 @@ import { createHash, randomUUID } from "node:crypto";
 import { lstat, mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
+class RecoveryCheckError extends Error {}
+
 export function requireCondition(condition, message) {
-  if (!condition) throw new Error(message);
+  if (!condition) throw new RecoveryCheckError(message);
+}
+
+export function failureDetails(error) {
+  // Only runner-authored assertions may enter the receipt; external errors can contain secrets.
+  return error instanceof RecoveryCheckError ? { check: error.message } : { check: "External operation failed; inspect local diagnostics" };
 }
 
 export function parseArguments(args) {
@@ -88,7 +95,11 @@ export async function runWrangler(context, side, operation) {
 export async function verifyToolchain(root) {
   requireCondition(Number(process.versions.node.split(".")[0]) >= 24, "Node.js 24 or newer is required");
   const lock = JSON.parse(await readFile(join(root, "package-lock.json"), "utf8"));
-  const installed = JSON.parse(await readFile(join(root, "node_modules/wrangler/package.json"), "utf8"));
-  requireCondition(installed.version === lock.packages["node_modules/wrangler"].version, "Installed Wrangler must match package-lock.json; run npm ci");
-  return { node: process.versions.node, wrangler: installed.version };
+  const versions = { node: process.versions.node };
+  for (const name of ["wrangler", "esbuild", "miniflare"]) {
+    const installed = JSON.parse(await readFile(join(root, "node_modules", name, "package.json"), "utf8"));
+    requireCondition(installed.version === lock.packages[`node_modules/${name}`]?.version, `Installed ${name} must match package-lock.json; run npm ci`);
+    versions[name] = installed.version;
+  }
+  return versions;
 }
