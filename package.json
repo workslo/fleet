@@ -10,7 +10,8 @@
     "test": "vitest run --config vitest.routines.config.ts && vitest run",
     "build": "vite build",
     "deploy:dry": "wrangler deploy --dry-run",
-    "check": "npm run typecheck && npm test && npm run build && npm run deploy:dry"
+    "check": "npm run typecheck && npm test && npm run build && npm run deploy:dry && npm run recovery:rehearse",
+    "recovery:rehearse": "node operations/rehearse-recovery.mjs"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "1.1.2",
