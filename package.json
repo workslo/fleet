@@ -7,7 +7,7 @@
   "scripts": {
     "types": "wrangler types",
     "typecheck": "npm run types && tsc --noEmit && tsc --project worker/test/tsconfig.json --noEmit && tsc --project board/tsconfig.json --noEmit && tsc --project routines/tsconfig.json --noEmit && tsc --project tsconfig.node.json --noEmit",
-    "test": "vitest run --config vitest.routines.config.ts && vitest run",
+    "test": "vitest run --config vitest.routines.config.ts && vitest run && node --test operations/*.test.mjs",
     "build": "vite build",
     "deploy:dry": "wrangler deploy --dry-run",
     "check": "npm run typecheck && npm test && npm run build && npm run deploy:dry && npm run recovery:rehearse",

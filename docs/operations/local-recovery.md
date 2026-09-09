@@ -54,6 +54,9 @@ this rehearsal. Stop it with Ctrl-C when finished.
 
 A SQL file existing on disk or matching table counts alone is insufficient.
 The report records the source revision and individual verification results.
+The comparison includes migration bookkeeping and SQLite's sequence counters.
+It excludes only Miniflare's `_cf_METADATA` engine table, which is not exported
+Fleet data; the manifest records that exclusion.
 For owner evidence, also record who ran the command and what they observed in
 the Board; an agent's run does not establish that Shane performed the rehearsal.
 
