@@ -1,4 +1,5 @@
 import { error, isResponse, json, requestJson } from "./http";
+import { decisionsForActor, decisionsForSource } from "./decisions";
 import { principalValues } from "./types";
 import type { Actor, Env, WorkRequestRow } from "./types";
 
@@ -159,7 +160,7 @@ async function requestEvidence(env: Env, requestId: string): Promise<EvidenceRow
 
 export async function getRequest(env: Env, requestId: string): Promise<Response> {
   const row = await workRequest(env, requestId);
-  return row ? json(requestResponse(row, await requestEvidence(env, requestId))) : error("not_found", "work request does not exist", 404);
+  return row ? json({ ...requestResponse(row, await requestEvidence(env, requestId)), needs_shane: await decisionsForSource(env, { requestId }) }) : error("not_found", "work request does not exist", 404);
 }
 
 export async function createRequest(request: Request, env: Env, caller: Actor, routeProjectId?: string): Promise<Response> {
@@ -375,13 +376,14 @@ export async function activity(env: Env, afterValue: string | null): Promise<Res
 export async function myWork(env: Env, caller: Actor, afterValue: string | null): Promise<Response> {
   const after = cursor(afterValue);
   if (isResponse(after)) return after;
-  const [accepted, ownedProjects, outbound, inbound, candidates, changes] = await Promise.all([
+  const [accepted, ownedProjects, outbound, inbound, candidates, changes, needsShane] = await Promise.all([
     env.DB.prepare("SELECT * FROM work_requests WHERE recipient_id = ? AND state = 'Accepted' ORDER BY created_at ASC, id ASC").bind(caller.id).all<WorkRequestRow>(),
     env.DB.prepare("SELECT id, next_action FROM projects WHERE owner_id = ? AND state = 'Active' ORDER BY updated_at DESC, id DESC").bind(caller.id).all<{ id: string; next_action: string | null }>(),
     env.DB.prepare("SELECT * FROM work_requests WHERE requester_id = ? ORDER BY created_at DESC, id DESC").bind(caller.id).all<WorkRequestRow>(),
     env.DB.prepare("SELECT * FROM work_requests WHERE recipient_id = ? ORDER BY created_at DESC, id DESC").bind(caller.id).all<WorkRequestRow>(),
     env.DB.prepare("SELECT id, project_id, actor_id, title, detail, created_at FROM pull_candidates ORDER BY created_at DESC, id DESC LIMIT 20").all<{ id: string; project_id: string; actor_id: string; title: string; detail: string; created_at: string }>(),
     activitySince(env, after.id, after.value),
+    decisionsForActor(env, caller.id),
   ]);
   return json({
     obligations: [
@@ -395,17 +397,7 @@ export async function myWork(env: Env, caller: Actor, afterValue: string | null)
     inbound_requests: inbound.results.map((entry) => requestResponse(entry)),
     pull_candidates: candidates.results.map((entry) => ({ id: entry.id, project_id: entry.project_id, actor: { id: entry.actor_id }, title: entry.title, detail: entry.detail, created_at: entry.created_at })),
     activity: changes.activity,
+    needs_shane: needsShane,
     next_cursor: changes.next_cursor,
   });
-}
-
-export async function decisions(env: Env): Promise<Response> {
-  const result = await env.DB.prepare("SELECT id, project_id, question, state, created_at FROM decision_requests ORDER BY created_at ASC, id ASC").all<{
-    id: string;
-    project_id: string;
-    question: string;
-    state: string;
-    created_at: string;
-  }>();
-  return json({ decisions: result.results });
 }

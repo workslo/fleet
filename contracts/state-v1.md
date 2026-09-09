@@ -50,3 +50,32 @@ A Pull Candidate is published voluntarily and never creates an obligation,
 claim, or priority. Every Active Project Owner has one derived
 `owner_next_action` obligation for each Active project they own, regardless of
 whether the project's `next_action` text is populated.
+
+## Needs Shane
+
+One Needs Shane record describes a `decision`, an `action`, or a
+`decision_and_action` against one existing Project or Work Request. It carries
+the specific ask and the condition that resolves Shane's part. A source Work
+Request may be standalone; its project association is derived on the server.
+New entries require exactly one source, but the source need not be Active.
+General blockers do not create entries automatically.
+
+The pending view includes records whose `state` is `Pending`. A decision-only
+record resolves when Shane records `approved` or `declined`, with a required
+explanation. A combined record remains pending after approval until its action
+is completed. Declining a combined ask resolves it with `action_status:
+not_required`; it never claims completion. An action-only record requires no
+new decision. `Resolved` means only that Shane's recorded part is finished;
+it does not authorize a Project, fulfill a Work Request, change its accepted
+scope, or record Product V1 acceptance.
+
+Decision, action completion and delegation are separate attributed facts.
+Delegation grants the named actor permission to record its own completion of
+this action; it creates no accepted obligation. Re-delegation replaces that
+permission while preserving earlier activity. An unfinished delegated action
+stays visible until completed. It does not execute provider operations.
+
+Resolved outcomes remain readable through history, source detail and the
+relevant actors' work snapshots, even after their activity cursors advance.
+Legacy decisions preserve their original state and date; missing creator,
+resolution condition and outcome provenance remain explicitly null.

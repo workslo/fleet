@@ -1,3 +1,5 @@
+import type { NeedsShane, CreateNeedsShane, RecordDecision, CompleteAction, DelegateAction } from "../../contracts/needs-shane";
+export type { NeedsShane, CreateNeedsShane, RecordDecision, CompleteAction, DelegateAction } from "../../contracts/needs-shane";
 export type ActorRef = { id: string };
 
 export type FleetIdentity = {
@@ -27,6 +29,7 @@ export type ProjectEnvelope = {
 };
 
 export type ProjectCard = {
+  needs_shane?: NeedsShane[];
   id: string;
   slug: string;
   title: string;
@@ -46,6 +49,7 @@ export type ProjectCard = {
 };
 
 export type WorkRequest = {
+  needs_shane?: NeedsShane[];
   id: string;
   project_id: string | null;
   requester: ActorRef;
@@ -77,6 +81,7 @@ export type PullCandidate = {
 };
 
 export type AgentWorkSnapshot = {
+  needs_shane?: NeedsShane[];
   obligations: Obligation[];
   outbound_requests: WorkRequest[];
   inbound_requests: WorkRequest[];
@@ -85,13 +90,7 @@ export type AgentWorkSnapshot = {
   next_cursor: string;
 };
 
-export type Decision = {
-  id: string;
-  project_id: string;
-  question: string;
-  state: string;
-  created_at: string;
-};
+export type Decision = NeedsShane;
 
 type ApiErrorBody = { error?: string; message?: string };
 
@@ -123,8 +122,24 @@ export class FleetApi {
     return this.get(`/v1/me/work?after=${encodeURIComponent(after)}`);
   }
 
-  async decisions(): Promise<{ decisions: Decision[] }> {
-    return this.get("/v1/decisions");
+  async decisions(all = false): Promise<{ decisions: Decision[] }> {
+    return this.get(all ? "/v1/decisions?state=all" : "/v1/decisions");
+  }
+
+  async createNeedsShane(input: CreateNeedsShane, key: string): Promise<NeedsShane> {
+    return this.post("/v1/decisions", input, undefined, key);
+  }
+
+  async decide(id: string, version: number, input: RecordDecision, key: string): Promise<NeedsShane> {
+    return this.post(`/v1/decisions/${encodeURIComponent(id)}/decide`, input, version, key);
+  }
+
+  async completeAction(id: string, version: number, input: CompleteAction, key: string): Promise<NeedsShane> {
+    return this.post(`/v1/decisions/${encodeURIComponent(id)}/complete-action`, input, version, key);
+  }
+
+  async delegateAction(id: string, version: number, input: DelegateAction, key: string): Promise<NeedsShane> {
+    return this.post(`/v1/decisions/${encodeURIComponent(id)}/delegate-action`, input, version, key);
   }
 
   async createStandaloneRequest(input: {

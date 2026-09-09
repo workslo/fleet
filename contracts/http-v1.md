@@ -25,7 +25,12 @@ All errors have this shape:
 | `POST /v1/pull-candidates` | Publish a Pull Candidate with `project_id`, `title`, and `detail`. |
 | `GET /v1/me/work?after=<cursor>` | Read the authenticated actor's reconciliation snapshot. |
 | `GET /v1/activity?after=<cursor>` | Read append-only activity after an opaque cursor. |
-| `GET /v1/decisions` | Read Decision requests. |
+| `GET /v1/decisions` | Read pending Needs Shane records; `?state=all` includes history. |
+| `POST /v1/decisions` | Raise a source-linked decision, action, or combined ask. |
+| `GET /v1/decisions/:id` | Read one Needs Shane record and its separate outcomes. |
+| `POST /v1/decisions/:id/decide` | Shane records `choice`, `summary`, and optional `evidence`. |
+| `POST /v1/decisions/:id/delegate-action` | Shane records `delegate_id` and a scope `summary`. |
+| `POST /v1/decisions/:id/complete-action` | Shane or the named delegate records `summary` and optional `evidence`. |
 
 Mutation requests require an `Idempotency-Key`. Repeating a key with the same
 authenticated actor, request path, method, and payload returns the stored
@@ -115,9 +120,58 @@ read returns IDs strictly greater than `after`, in ascending order, capped at
 200. `next_cursor` is the last returned ID, or the supplied cursor when no
 activity is returned.
 
-`GET /v1/decisions` reads `decision_requests` and returns records with `id`,
-`project_id`, `question`, `state`, and `created_at`. It may return an empty
-array in this first read-only slice.
+`GET /v1/decisions` reads `decision_requests` and returns `{ decisions: [...] }`.
+The default (or `?state=pending`) filters `Pending` records. `?state=all`
+includes resolved and legacy history; other filter values fail with 400.
+The shared response and input types are in [`needs-shane.ts`](needs-shane.ts).
+
+Creation requires `kind` (`decision`, `action`, `decision_and_action`), a
+non-blank `question`, a non-blank `resolution_condition`, and exactly one of
+`project_id` or `work_request_id`. The linked source must exist. Request-linked
+entries derive `project_id` from their source, including null for standalone
+work. Creation returns 201. Unknown fields and caller identity fields fail
+with 400; missing sources fail with 404.
+
+Transitions require `If-Match` with the current Needs Shane version and an
+actor-scoped `Idempotency-Key`. Decisions accept `choice: approved | declined`
+and a non-blank `summary`. Action completion requires a non-blank `summary`.
+Both accept up to 20 optional `{ uri, summary }` evidence links using absolute
+HTTP/HTTPS URLs and non-blank metadata. Delegation requires a non-blank
+`summary` and an active agent's `delegate_id`. Unknown fields fail with 400.
+Unauthorized callers receive 403, stale versions 412, and inapplicable
+transitions 409. A lost-response retry of the same logical operation returns
+the stored response before testing current state. Evidence, attributed
+activity, the record transition and replay response are committed atomically.
+
+Records include `requester`, `kind`, `resolution_condition`, `version`, source
+IDs, state and timestamps. `decision` stores choice, summary, evidence, actor
+and time; `action` stores summary, evidence, actual actor and time;
+`delegation` separately stores the authorizing actor, delegate, scope summary
+and time. Missing facts are null. `action_status` distinguishes
+`not_requested`, `awaiting_decision`, `pending`, `completed` and `not_required`.
+
+`GET /v1/me/work` adds `needs_shane`, including pending and resolved records
+raised by the caller, delegated to it, linked to its inbound/outbound Work
+Requests, or linked to projects it owns or is proposed to own. Shane sees all
+records. These current outcomes are independent of the activity cursor.
+Request and Project detail responses also add `needs_shane` for their source.
+Supplied evidence is linked to that source. Activity payloads carry
+`decision_request_id`; source work state, ownership and versions remain
+unchanged when Shane's part resolves.
+
+The compact Portfolio listing omits `needs_shane`; load Project detail to see
+its related outcomes. The Needs Shane history and relevant work snapshots
+currently return all matching records, including resolved outcomes. They are
+not paginated; larger deployments need a defined pagination and reconciliation
+contract before those histories grow substantially. Do not silently truncate
+pending dependencies or current outcomes using an arbitrary row limit.
+
+The Board retains an uncertain submission's exact payload, version and
+idempotency key through retries and navigation within the app. This state is
+in memory, so a full page reload discards the pending submission. After a
+reload, reconcile the current source records and history before creating a
+replacement ask; do not assume the earlier submission failed. Native callers
+remain responsible for persisting their logical-operation keys as needed.
 
 The `pull_candidates` array is the shared pool — it is not scoped per actor
 (a Pull Candidate is voluntary and creates no obligation, claim, or priority).

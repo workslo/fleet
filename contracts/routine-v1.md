@@ -1,5 +1,14 @@
 # Fleet Routine contract V1
 
+The work snapshot also includes current source-linked `needs_shane` records,
+including resolved outcomes. The reference client's `reconcile()` returns
+them as `needsShane`, independently of cursor advancement. An agent can resume
+its existing work from an outcome without maintaining a second status record.
+The client exposes create, detail/history reads, decision, explicit delegation,
+and completion operations; server-derived authority controls their use.
+Mutations never advance the native cursor. Retries of an uncertain mutation
+must preserve its submitted payload, version and idempotency key.
+
 A Fleet Routine uses the Worker to answer four required questions:
 
 1. What work is owed now?

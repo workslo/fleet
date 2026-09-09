@@ -72,3 +72,9 @@ An agent's native practice for reconciling shared projects, requests,
 obligations, evidence, and state through the Fleet interface.
 _Avoid_: HEARTBEAT, JOURNAL
 
+**Needs Shane**:
+The shared view of specific decisions or actions requiring Shane, each with a
+clear resolution condition and a link to its originating work. Approval and
+action completion are separate facts. Resolving Shane's part leaves the
+broader work with its existing owner.
+_Avoid_: Generic blocker list, separate tracker, project completion

@@ -1,7 +1,8 @@
 import { enforceSameOriginMutation, resolveCaller } from "./auth";
 import { error, isResponse, json } from "./http";
+import { createDecision, getDecision, listDecisions, transitionDecision } from "./decisions";
 import { acceptOwnership, authorizeProject, createProject, getProject, portfolio } from "./projects";
-import { acceptRequest, activity, createPullCandidate, createRequest, decisions, fulfillRequest, getRequest, myWork } from "./work";
+import { acceptRequest, activity, createPullCandidate, createRequest, fulfillRequest, getRequest, myWork } from "./work";
 import type { Env } from "./types";
 
 function decodeRouteId(value: string): string | Response {
@@ -32,10 +33,23 @@ export default {
     if (request.method === "GET" && url.pathname === "/v1/portfolio") return portfolio(env);
     if (request.method === "GET" && url.pathname === "/v1/me/work") return myWork(env, caller, url.searchParams.get("after"));
     if (request.method === "GET" && url.pathname === "/v1/activity") return activity(env, url.searchParams.get("after"));
-    if (request.method === "GET" && url.pathname === "/v1/decisions") return decisions(env);
+    if (request.method === "GET" && url.pathname === "/v1/decisions") return listDecisions(env, url.searchParams.get("state"));
+    if (request.method === "POST" && url.pathname === "/v1/decisions") return createDecision(request, env, caller);
     if (request.method === "POST" && url.pathname === "/v1/projects") return createProject(request, env, caller);
     if (request.method === "POST" && url.pathname === "/v1/requests") return createRequest(request, env, caller);
     if (request.method === "POST" && url.pathname === "/v1/pull-candidates") return createPullCandidate(request, env, caller);
+
+    const decisionMatch = url.pathname.match(/^\/v1\/decisions\/([^/]+)(?:\/(decide|complete-action|delegate-action))?$/);
+    if (decisionMatch) {
+      const decisionId = decodeRouteId(decisionMatch[1] ?? "");
+      if (isResponse(decisionId)) return decisionId;
+      if (request.method === "GET" && !decisionMatch[2]) return getDecision(env, decisionId);
+      const action = decisionMatch[2];
+      if (request.method === "POST" && (action === "decide" || action === "complete-action" || action === "delegate-action")) {
+        return transitionDecision(request, env, caller, decisionId, action);
+      }
+      return error("not_found", "route does not exist", 404);
+    }
 
     const requestMatch = url.pathname.match(/^\/v1\/requests\/([^/]+)(?:\/(accept|fulfill))?$/);
     if (requestMatch) {

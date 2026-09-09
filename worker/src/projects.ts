@@ -1,4 +1,5 @@
 import { error, isResponse, json, requestJson } from "./http";
+import { decisionsForSource } from "./decisions";
 import { principalValues } from "./types";
 import type { Actor, AuthorizationInput, Env, ProjectRow } from "./types";
 
@@ -113,7 +114,7 @@ function expectedVersion(request: Request): number | Response {
     : error("invalid_request", "If-Match must be a quoted positive project version", 400);
 }
 
-async function card(env: Env, row: ProjectRow) {
+async function card(env: Env, row: ProjectRow, includeNeedsShane = true) {
   const results = await env.DB.batch([
     env.DB.prepare("SELECT revision, outcome, scope_json, exclusions_json, delegated_actions_json, gates_json, validation_evidence_json FROM project_envelope_revisions WHERE project_id = ? ORDER BY revision DESC LIMIT 1").bind(row.id),
     env.DB.prepare("SELECT revision, body FROM plan_revisions WHERE project_id = ? ORDER BY revision DESC LIMIT 1").bind(row.id),
@@ -141,6 +142,7 @@ async function card(env: Env, row: ProjectRow) {
     health: row.health,
     next_action: row.next_action,
     version: row.version,
+    ...(includeNeedsShane ? { needs_shane: await decisionsForSource(env, { projectId: row.id }) } : {}),
     envelope: currentEnvelope && {
       revision: currentEnvelope.revision,
       outcome: currentEnvelope.outcome,
@@ -373,5 +375,5 @@ export async function getProject(env: Env, projectId: string): Promise<Response>
 
 export async function portfolio(env: Env): Promise<Response> {
   const projects = await env.DB.prepare("SELECT * FROM projects ORDER BY updated_at DESC, id DESC").all<ProjectRow>();
-  return json({ projects: await Promise.all(projects.results.map((project) => card(env, project))) });
+  return json({ projects: await Promise.all(projects.results.map((project) => card(env, project, false))) });
 }
