@@ -80,7 +80,7 @@ export function App() {
     void load();
   }, [error, load, loadProject, selectedProjectId]);
 
-  const runWorkAction = useCallback(async (action: () => Promise<WorkRequest>): Promise<boolean> => {
+  const runWorkAction = useCallback(async (action: () => Promise<WorkRequest>, requestId?: string): Promise<boolean> => {
     setActionPending(true);
     setError(null);
     try {
@@ -88,8 +88,17 @@ export function App() {
       try {
         changedRequest = await action();
       } catch (caught) {
-        setError({ message: caught instanceof FleetApiError ? caught.message : "The Fleet action failed. Refresh current work before retrying.", scope: "global" });
-        return false;
+        if (!(caught instanceof FleetApiError) || caught.status !== 412 || !requestId) throw caught;
+        let message = "This request changed. Review the refreshed request before trying again; no action was resubmitted.";
+        try {
+          const [work, detail] = await Promise.all([api.myWork(), api.request(requestId)]);
+          setData((current) => ({ ...current, work }));
+          setRequestDetails((current) => ({ ...current, [requestId]: detail }));
+        } catch {
+          message = "This request changed, and current work could not be refreshed. Reload My Work before trying again.";
+        }
+        setError({ message, scope: "global" });
+        throw new FleetApiError(message, 412);
       }
       setRequestDetails((current) => ({ ...current, [changedRequest.id]: changedRequest }));
       try {
@@ -171,17 +180,19 @@ export function App() {
         {!loading && view === "portfolio" ? <PortfolioView projects={data.projects} onSelectProject={(id) => void selectProject(id)} /> : null}
         {!loading && view === "project" && selectedProject ? <ProjectView project={selectedProject} onBack={() => setView("portfolio")} /> : null}
         {!loading && view === "project" && !selectedProject && !error ? <p>Choose a Fleet Project from the portfolio.</p> : null}
-        {!loading && view === "my-work" ? (
+        <div hidden={loading || view !== "my-work"}>
           <MyWorkView
             work={data.work}
+            actorId={data.identity?.actor.id ?? ""}
             requestDetails={requestDetails}
             busy={actionPending}
             onCreate={(input, idempotencyKey) => runWorkAction(() => api.createStandaloneRequest(input, idempotencyKey))}
-            onAccept={(request, idempotencyKey) => runWorkAction(() => api.acceptRequest(request.id, request.version, idempotencyKey))}
-            onFulfill={(request, evidence, idempotencyKey) => runWorkAction(() => api.fulfillRequest(request.id, request.version, evidence, idempotencyKey))}
+            onAccept={(request, idempotencyKey) => runWorkAction(() => api.acceptRequest(request.id, request.version, idempotencyKey), request.id)}
+            onFulfill={(request, evidence, idempotencyKey) => runWorkAction(() => api.fulfillRequest(request.id, request.version, evidence, idempotencyKey), request.id)}
+            onTransition={(request, transition, input, key) => runWorkAction(() => api.transitionRequest(request.id, request.version, transition, input, key), request.id)}
             onView={(request) => loadRequest(request.id)}
           />
-        ) : null}
+        </div>
         {!loading && view === "pull-candidates" ? <PullCandidatesView candidates={data.work.pull_candidates} /> : null}
         <div hidden={loading || view !== "decisions"}><DecisionsView decisions={data.decisions} actorId={data.identity?.actor.id ?? ""}
           onHistory={async () => { const history = await api.decisions(true); setData((current) => ({ ...current, decisions: history.decisions })); }}

@@ -68,7 +68,7 @@ describe("Needs Shane Board actions", () => {
     await userEvent.type(screen.getByLabelText("Decision summary"), "Approved agreed access");
     await userEvent.click(screen.getByRole("button", { name: "Record decision for Enable agreed access" }));
     expect(await screen.findByText("State: Pending. Action: pending.")).toBeVisible();
-    expect(screen.getByText(/Decision approved by shane/)).toBeVisible();
+    expect(screen.getByText(/Decision approved by shane at/)).toBeVisible();
     await userEvent.type(screen.getByLabelText("Action completion summary"), "Access enabled");
     await userEvent.type(screen.getByLabelText("Action completion evidence URL"), "https://example.test/receipt");
     await userEvent.type(screen.getByLabelText("Action completion evidence summary"), "Provisioning receipt");
