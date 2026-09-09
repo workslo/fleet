@@ -2,7 +2,7 @@
 * { box-sizing: border-box; }
 body { margin: 0; line-height: 1.5; }
 a { color: #135c89; }
-a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px solid #e28b22; outline-offset: 3px; }
+a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, summary:focus-visible { outline: 3px solid #e28b22; outline-offset: 3px; }
 .app-shell { max-width: 74rem; margin: 0 auto; padding: 1.5rem; }
 .site-header { border-bottom: 1px solid #cbd5df; margin-bottom: 1.5rem; }
 .eyebrow { color: #52616d; font-size: .85rem; font-weight: 700; letter-spacing: .08em; margin: 0; text-transform: uppercase; }
@@ -22,8 +22,18 @@ button { background: #135c89; border: 0; border-radius: .25rem; color: #fff; cur
 button:disabled { cursor: wait; opacity: .65; }
 form { display: grid; gap: .75rem; max-width: 42rem; }
 label { display: grid; gap: .25rem; font-weight: 700; }
-input, textarea { border: 1px solid #8c9aa5; border-radius: .25rem; color: inherit; font: inherit; padding: .5rem; width: 100%; }
+input, textarea, select { border: 1px solid #8c9aa5; border-radius: .25rem; color: inherit; font: inherit; padding: .5rem; width: 100%; }
 textarea { min-height: 6rem; resize: vertical; }
 form button { justify-self: start; }
 section + section { margin-top: 1.75rem; }
 @media (min-width: 42rem) { .summary-list { grid-template-columns: repeat(3, minmax(0, 1fr)); } .project-details { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+fieldset { display: grid; gap: .75rem; min-width: 0; margin: 0; padding: 0; border: 0; }
+fieldset:disabled { opacity: .75; }
+.card-list form { margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid #e1e6eb; }
+.needs-shane-create { margin-bottom: 1.25rem; }
+.needs-shane-create summary { color: #135c89; cursor: pointer; font-weight: 700; padding: .5rem 0; }
+.needs-shane-create[open] summary { margin-bottom: .75rem; }
+.needs-shane-controls { display: flex; align-items: center; flex-wrap: wrap; gap: .75rem 1.25rem; margin-bottom: 1.25rem; }
+.checkbox-label { display: inline-flex; align-items: center; gap: .5rem; font-weight: 400; }
+input[type="checkbox"] { width: 1.1rem; height: 1.1rem; padding: 0; margin: 0; }

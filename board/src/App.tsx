@@ -161,13 +161,13 @@ export function App() {
           />
         ) : null}
         {!loading && view === "pull-candidates" ? <PullCandidatesView candidates={data.work.pull_candidates} /> : null}
-        {!loading && view === "decisions" ? <DecisionsView decisions={data.decisions} actorId={data.identity?.actor.id ?? ""}
+        <div hidden={loading || view !== "decisions"}><DecisionsView decisions={data.decisions} actorId={data.identity?.actor.id ?? ""}
           onHistory={async () => { const history = await api.decisions(true); setData((current) => ({ ...current, decisions: history.decisions })); }}
           onCreate={(input, key) => runNeedsShaneAction(() => api.createNeedsShane(input, key))}
           onDecide={(id, version, input, key) => runNeedsShaneAction(() => api.decide(id, version, input, key))}
           onComplete={(id, version, input, key) => runNeedsShaneAction(() => api.completeAction(id, version, input, key))}
           onDelegate={(id, version, input, key) => runNeedsShaneAction(() => api.delegateAction(id, version, input, key))}
-        /> : null}
+        /></div>
       </main>
     </div>
   );

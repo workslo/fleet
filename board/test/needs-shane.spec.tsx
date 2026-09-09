@@ -13,17 +13,23 @@ const initial: NeedsShane = {
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 const work = { obligations: [{ source: "accepted_request", project_id: null, request_id: "request-1", title: "Verify access" }], inbound_requests: [], outbound_requests: [], pull_candidates: [], activity: [], next_cursor: "0" };
 
-function fixture(actor = "shane", seed = initial, loseDecision = false) {
+function fixture(actor = "shane", seed = initial, loseDecision = false, loseCreate = false) {
   let record = structuredClone(seed);
   const attempts: Array<{ key: string | null; version: string | null; body: string }> = [];
   let created: unknown;
+  const creationAttempts: Array<{ key: string | null; body: string }> = [];
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     if (url === "/v1/me") return json({ actor: { id: actor, display_name: actor }, principal: { kind: actor === "shane" ? "human" : "service" } });
     if (url === "/v1/portfolio") return json({ projects: [] });
     if (url === "/v1/me/work?after=0") return json({ ...work, needs_shane: [record] });
     if (url === "/v1/decisions?state=all") return json({ decisions: [record] });
     if (url === "/v1/decisions" && init?.method !== "POST") return json({ decisions: record.state === "Pending" ? [record] : [] });
-    if (url === "/v1/decisions" && init?.method === "POST") { created = JSON.parse(String(init.body)); return json({ ...initial, id: "need-new", ...created as object }, 201); }
+    if (url === "/v1/decisions" && init?.method === "POST") {
+      creationAttempts.push({ key: new Headers(init.headers).get("Idempotency-Key"), body: String(init.body) });
+      created = JSON.parse(String(init.body));
+      if (loseCreate && creationAttempts.length === 1) throw new Error("response lost");
+      return json({ ...initial, id: "need-new", ...created as object }, 201);
+    }
     if (url === "/v1/decisions/need-1/decide") {
       attempts.push({ key: new Headers(init?.headers).get("Idempotency-Key"), version: new Headers(init?.headers).get("If-Match"), body: String(init?.body) });
       const body = JSON.parse(String(init?.body));
@@ -39,7 +45,7 @@ function fixture(actor = "shane", seed = initial, loseDecision = false) {
     }
     return json({ message: "unexpected request" }, 404);
   }));
-  return { attempts, record: () => record, created: () => created };
+  return { attempts, creationAttempts, record: () => record, created: () => created };
 }
 async function open() {
   render(<App />);
@@ -101,6 +107,7 @@ describe("Needs Shane Board actions", () => {
 
   it("creates a specific source-linked ask with an explicit resolution condition", async () => {
     const state = fixture("codex"); await open();
+    await userEvent.click(screen.getByText("Request Shane’s involvement", { selector: "summary" }));
     const form = within(screen.getByRole("form", { name: "Request Shane’s involvement" }));
     await userEvent.type(form.getByLabelText("Source ID"), "standalone-request");
     await userEvent.selectOptions(form.getByLabelText("What is needed"), "action");
@@ -110,4 +117,27 @@ describe("Needs Shane Board actions", () => {
     expect(await screen.findByRole("heading", { name: "Enable the approved route" })).toBeVisible();
     expect(state.created()).toEqual({ work_request_id: "standalone-request", kind: "action", question: "Enable the approved route", resolution_condition: "Route is enabled" });
   });
+
+  it("keeps an uncertain creation payload and key across in-app navigation", async () => {
+    const state = fixture("codex", initial, false, true); await open();
+    expect(screen.getByText("Request Shane’s involvement", { selector: "summary" }).parentElement).not.toHaveAttribute("open");
+    expect(screen.getByRole("heading", { name: "Enable agreed access" })).toBeVisible();
+    await userEvent.click(screen.getByText("Request Shane’s involvement", { selector: "summary" }));
+    await userEvent.type(screen.getByLabelText("Source ID"), "request-1");
+    await userEvent.type(screen.getByLabelText("Specific ask"), "Enable agreed route");
+    await userEvent.type(screen.getByLabelText("What resolves Shane’s part"), "Route is enabled");
+    await userEvent.click(screen.getByRole("button", { name: "Request Shane’s involvement" }));
+    await screen.findByRole("button", { name: "Retry Request Shane’s involvement" });
+    await userEvent.click(screen.getByRole("link", { name: "My Work" }));
+    expect(screen.queryByRole("button", { name: "Retry Request Shane’s involvement" })).toBeNull();
+    await userEvent.click(screen.getByRole("link", { name: "Needs Shane" }));
+    expect(screen.getByLabelText("Specific ask")).toHaveValue("Enable agreed route");
+    expect(screen.getByLabelText("Specific ask")).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Retry Request Shane’s involvement" }));
+    expect(await screen.findByRole("heading", { name: "Enable agreed route" })).toBeVisible();
+    expect(state.creationAttempts).toHaveLength(2);
+    expect(state.creationAttempts[1]).toEqual(state.creationAttempts[0]);
+    expect(state.creationAttempts[0]?.key).toBeTruthy();
+  });
+
 });

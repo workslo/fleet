@@ -79,6 +79,8 @@ export function DecisionsView({ decisions, actorId, onHistory, onCreate, onDecid
   return <section aria-labelledby="decisions-heading">
     <h1 id="decisions-heading">Needs Shane</h1>
     <p>Specific decisions and actions. Resolving Shane’s part leaves the original work with its owner.</p>
+    <details className="needs-shane-create">
+    <summary>Request Shane’s involvement</summary>
     <MutationForm label="Request Shane’s involvement" prepare={(data, key) => {
       const sourceType = String(data.get("source_type"));
       const sourceId = String(data.get("source_id")).trim();
@@ -96,8 +98,11 @@ export function DecisionsView({ decisions, actorId, onHistory, onCreate, onDecid
       <label>Specific ask<textarea name="question" required /></label>
       <label>What resolves Shane’s part<textarea name="resolution_condition" required /></label>
     </MutationForm>
-    <label><input type="checkbox" checked={showHistory} onChange={(event) => { setShowHistory(event.target.checked); if (event.target.checked) void refresh(); }} />Include resolved history</label>
+    </details>
+    <div className="needs-shane-controls">
+    <label className="checkbox-label"><input type="checkbox" checked={showHistory} onChange={(event) => { setShowHistory(event.target.checked); if (event.target.checked) void refresh(); }} />Include resolved history</label>
     <button type="button" onClick={() => void refresh()}>Refresh Needs Shane</button>
+    </div>
     {readError ? <p role="alert">{readError}</p> : null}
     {visible.length === 0 ? <p>{showHistory ? "No Needs Shane records yet." : "No decisions or actions need Shane’s attention."}</p> : <ul className="card-list">
       {visible.map((entry) => <li key={entry.id}>
