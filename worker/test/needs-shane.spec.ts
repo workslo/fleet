@@ -155,6 +155,8 @@ describe("Needs Shane lifecycle", () => {
     const entry = await ask.json() as NeedsShane;
     await api("shane", `/v1/decisions/${entry.id}/decide`, { choice: "approved", summary: "Useful direction; project authorization is separate." }, 1);
     expect(await (await api("codex", `/v1/projects/${project.id}`)).json()).toMatchObject({ state: "Proposed", version: 1, needs_shane: [expect.objectContaining({ id: entry.id, state: "Resolved" })] });
+    const portfolio = await (await api("codex", "/v1/portfolio")).json() as { projects: { id: string; needs_shane?: NeedsShane[] }[] };
+    expect(portfolio.projects.find((item) => item.id === project.id)).not.toHaveProperty("needs_shane");
   });
 
   it("revokes the old delegate when Shane changes the permitted performer", async () => {

@@ -190,7 +190,11 @@ export async function transitionDecision(request: Request, env: Env, caller: Act
     return error("forbidden", "only Shane decides or delegates; only Shane or the named delegate completes the action", 403);
   }
   if (current.version !== version) return error("precondition_failed", "Needs Shane version is stale", 412);
-  if (current.state !== "Pending") return error("conflict", "Shane's part is already resolved", 409);
+  if (current.state !== "Pending") {
+    return error("conflict", current.state === "Resolved"
+      ? "Shane's part is already resolved"
+      : "this legacy state is preserved in history and has no supported transition", 409);
+  }
   const now = new Date().toISOString();
   const evidence = (body.evidence ?? []) as NeedsShaneEvidence[];
   const outcome = { actor: { id: caller.id }, summary: body.summary, evidence, at: now };

@@ -159,6 +159,20 @@ Supplied evidence is linked to that source. Activity payloads carry
 `decision_request_id`; source work state, ownership and versions remain
 unchanged when Shane's part resolves.
 
+The compact Portfolio listing omits `needs_shane`; load Project detail to see
+its related outcomes. The Needs Shane history and relevant work snapshots
+currently return all matching records, including resolved outcomes. They are
+not paginated; larger deployments need a defined pagination and reconciliation
+contract before those histories grow substantially. Do not silently truncate
+pending dependencies or current outcomes using an arbitrary row limit.
+
+The Board retains an uncertain submission's exact payload, version and
+idempotency key through retries and navigation within the app. This state is
+in memory, so a full page reload discards the pending submission. After a
+reload, reconcile the current source records and history before creating a
+replacement ask; do not assume the earlier submission failed. Native callers
+remain responsible for persisting their logical-operation keys as needed.
+
 The `pull_candidates` array is the shared pool — it is not scoped per actor
 (a Pull Candidate is voluntary and creates no obligation, claim, or priority).
 It is capped at the 20 newest candidates, ordered `created_at` descending.
