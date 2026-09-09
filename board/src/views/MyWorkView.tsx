@@ -141,8 +141,8 @@ function RequestActions({ request, actorId, inbound, busy, onAccept, onFulfill, 
   return <div className="request-actions">
     {recipient && pending && !request.expiry_due ? <RequestMutationForm label={`Accept ${request.title}`} busy={busy} prepare={(_data, key) => { const frozen = { ...request }; return () => onAccept(frozen, key); }} /> : null}
     {pending && request.expiry_due && (recipient || requester) ? <RequestMutationForm label={`Record expiry for ${request.title}`} busy={busy} prepare={(_data, key) => { const frozen = { ...request }; return () => onTransition(frozen, "expire", {}, key); }} /> : null}
-    {recipient && pending ? act(`Decline ${request.title}`, "decline", <label>Decline reason for {request.title}<textarea name="reason" required /></label>, (data) => ({ reason: String(data.get("reason")) })) : null}
-    {requester && pending ? act(`Withdraw ${request.title}`, "withdraw", <label>Withdrawal reason for {request.title}<textarea name="reason" required /></label>, (data) => ({ reason: String(data.get("reason")) })) : null}
+    {recipient && pending && !request.expiry_due ? act(`Decline ${request.title}`, "decline", <label>Decline reason for {request.title}<textarea name="reason" required /></label>, (data) => ({ reason: String(data.get("reason")) })) : null}
+    {requester && pending && !request.expiry_due ? act(`Withdraw ${request.title}`, "withdraw", <label>Withdrawal reason for {request.title}<textarea name="reason" required /></label>, (data) => ({ reason: String(data.get("reason")) })) : null}
     {recipient && accepted ? <>
       <RequestMutationForm label={`Fulfill ${request.title}`} busy={busy} prepare={(data, key) => {
         const frozen = { ...request };

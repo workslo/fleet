@@ -125,10 +125,17 @@ describe("Work Request lifecycle on the Board", () => {
     const state = fixture("codex", due); await open();
     expect(screen.getByText(/The invitation deadline has passed/)).toBeVisible();
     expect(screen.queryByRole("button", { name: "Accept Review access" })).toBeNull();
+    expect(screen.queryByText("Decline Review access", { selector: "summary" })).toBeNull();
+    expect(screen.queryByText("Withdraw Review access", { selector: "summary" })).toBeNull();
     expect(state.attempts).toHaveLength(0);
     await userEvent.click(screen.getByRole("button", { name: "Record expiry for Review access" }));
     expect(await screen.findByText(`Expired recorded by codex at ${at}.`)).toBeVisible();
     expect(state.attempts[0]?.body).toEqual({});
+    cleanup(); fixture("claude", due); await open();
+    expect(screen.queryByText("Withdraw Review access", { selector: "summary" })).toBeNull();
+    expect(screen.queryByText("Decline Review access", { selector: "summary" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Accept Review access" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Record expiry for Review access" })).toBeVisible();
     cleanup(); fixture("codex", { ...accepted, expires_at: due.expires_at }); await open();
     expect(screen.queryByRole("button", { name: /Record expiry/ })).toBeNull();
     expect(screen.getByText("Owed review")).toBeVisible();
