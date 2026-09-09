@@ -97,7 +97,7 @@ export type Decision = NeedsShane;
 type ApiErrorBody = { error?: string; message?: string };
 
 export class FleetApiError extends Error {
-  constructor(message: string, readonly status: number) {
+  constructor(message: string, readonly status: number, readonly reportedGlobally = false) {
     super(message);
     this.name = "FleetApiError";
   }

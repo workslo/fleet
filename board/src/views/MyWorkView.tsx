@@ -32,8 +32,8 @@ function RequestMutationForm({ label, busy, children, prepare }: {
     } catch (caught) {
       const definite = caught instanceof FleetApiError && caught.status >= 400 && caught.status < 500;
       if (definite) setAttempt(null);
-      // The parent keeps stale-record guidance visible even if this form disappears.
-      if (!(caught instanceof FleetApiError && caught.status === 412)) setError(caught instanceof Error ? caught.message : "The action could not be confirmed.");
+      // The parent keeps conflict guidance visible even if this form disappears.
+      if (!(caught instanceof FleetApiError && caught.reportedGlobally)) setError(caught instanceof Error ? caught.message : "The action could not be confirmed.");
     }
   };
   return <form aria-label={label} onSubmit={(event) => void submit(event)}>

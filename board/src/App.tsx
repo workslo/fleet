@@ -88,17 +88,17 @@ export function App() {
       try {
         changedRequest = await action();
       } catch (caught) {
-        if (!(caught instanceof FleetApiError) || caught.status !== 412 || !requestId) throw caught;
-        let message = "This request changed. Review the refreshed request before trying again; no action was resubmitted.";
+        if (!(caught instanceof FleetApiError) || ![409, 412].includes(caught.status) || !requestId) throw caught;
+        let message = `${caught.message}. Review the refreshed request before another attempt; no action was resubmitted.`;
         try {
           const [work, detail] = await Promise.all([api.myWork(), api.request(requestId)]);
           setData((current) => ({ ...current, work }));
           setRequestDetails((current) => ({ ...current, [requestId]: detail }));
         } catch {
-          message = "This request changed, and current work could not be refreshed. Reload My Work before trying again.";
+          message = `${caught.message}. Current work could not be refreshed. Reload My Work before trying again.`;
         }
         setError({ message, scope: "global" });
-        throw new FleetApiError(message, 412);
+        throw new FleetApiError(message, caught.status, true);
       }
       setRequestDetails((current) => ({ ...current, [changedRequest.id]: changedRequest }));
       try {

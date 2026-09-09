@@ -13,7 +13,7 @@ const accepted = { ...pending, state: "Accepted", version: 2, accepted_scope: { 
 const at = "2026-09-09T12:00:00.000Z";
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 type Attempt = { path: string; version: string | null; key: string | null; body: Record<string, unknown> };
-function fixture(actor = "codex", seed = pending, options: { lose?: string; stale?: string; unrelated?: boolean } = {}) {
+function fixture(actor = "codex", seed = pending, options: { lose?: string; stale?: string; unrelated?: boolean; deadlinePassed?: boolean; creationConflict?: boolean } = {}) {
   let current = structuredClone(seed);
   const attempts: Attempt[] = [];
   const replay = new Map<string, WorkRequest>();
@@ -37,6 +37,8 @@ function fixture(actor = "codex", seed = pending, options: { lose?: string; stal
     attempts.push(attempt);
     const action = path === "/v1/requests" ? "create" : path.split("/").at(-1) ?? "";
     const nth = attempts.filter((entry) => entry.path === path).length;
+    if (options.creationConflict && action === "create") return json({ message: "Creation conflicts with an earlier submission" }, 409);
+    if (options.deadlinePassed && action === "accept") { current = { ...current, expiry_due: true }; return json({ message: "The invitation deadline has passed" }, 409); }
     if (options.stale === action && nth === 1) { current = { ...current, version: current.version + 1 }; return json({ message: "Request version is stale" }, 412); }
     const stored = replay.get(attempt.key ?? "");
     if (stored) return json(stored, action === "create" ? 201 : 200);
@@ -183,4 +185,29 @@ describe("Work Request lifecycle on the Board", () => {
     expect(state.attempts[1]?.key).not.toBe(state.attempts[0]?.key);
     expect(screen.queryByRole("alert")).toBeNull();
   });
+
+  it("refreshes overdue controls after an acceptance conflict without automatically resubmitting", async () => {
+    const state = fixture("codex", { ...pending, expires_at: "2026-09-09T12:00:00.000Z", expiry_due: false }, { deadlinePassed: true }); await open();
+    await userEvent.click(screen.getByRole("button", { name: "Accept Review access" }));
+    expect(await screen.findByRole("button", { name: "Record expiry for Review access" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Accept Review access" })).toBeNull();
+    expect(screen.queryByText("Decline Review access", { selector: "summary" })).toBeNull();
+    const alerts = screen.getAllByRole("alert");
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toHaveTextContent("The invitation deadline has passed. Review the refreshed request before another attempt");
+    expect(state.attempts).toHaveLength(1);
+    expect(state.attempts[0]?.path).toBe("/v1/requests/request-one/accept");
+  });
+
+
+  it("still displays a creation conflict locally when no existing request can be refreshed", async () => {
+    fixture("codex", pending, { creationConflict: true }); await open();
+    await userEvent.type(screen.getByLabelText("Recipient ID"), "claude");
+    await userEvent.type(screen.getByLabelText("Review title"), "Conflicting invitation");
+    await userEvent.type(screen.getByLabelText("Review scope"), "Bounded review");
+    await userEvent.click(screen.getByRole("button", { name: "Send standalone review" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Creation conflicts with an earlier submission");
+    expect(screen.getByLabelText("Review title")).not.toBeDisabled();
+  });
+
 });
