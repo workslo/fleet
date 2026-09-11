@@ -1,8 +1,11 @@
 # Operations
 
-Operations documentation will cover deployment, credential lifecycle metadata,
-backup, export, restore, reconciliation, and recovery. Production operations
-remain gated until their implementation plan and owner evidence are accepted.
+The [local recovery rehearsal](local-recovery.md) gives the owner a repeatable
+way to export synthetic Fleet state, restore it into a clean local D1 database,
+and check the recovered records through the Worker and Board.
+
+Production deployment, credential lifecycle, backup retention, and restoration
+of existing data still require their own accepted operations plan and evidence.
 
 Production identity prerequisites are documented in
 [`../onboarding/cloudflare-access.md`](../onboarding/cloudflare-access.md).
