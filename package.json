@@ -14,7 +14,7 @@
     "recovery:rehearse": "node operations/rehearse-recovery.mjs"
   },
   "devDependencies": {
-    "@cloudflare/vitest-plugin": "1.1.2",
+    "@cloudflare/vitest-plugin": "1.1.7",
     "@testing-library/jest-dom": "7.0.1",
     "@testing-library/react": "16.3.3",
     "@testing-library/user-event": "14.6.6",
@@ -26,7 +26,7 @@
     "typescript": "7.0.2",
     "vite": "8.2.2",
     "vitest": "4.1.11",
-    "wrangler": "4.127.1"
+    "wrangler": "4.131.0"
   },
   "engines": {
     "node": ">=24"
