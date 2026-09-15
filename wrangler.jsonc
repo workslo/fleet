@@ -4,6 +4,12 @@
   "main": "worker/src/index.ts",
   "workers_dev": false,
   "preview_urls": false,
+  "routes": [
+    {
+      "pattern": "fleet.workslo.ai",
+      "custom_domain": true
+    }
+  ],
   "compatibility_date": "2026-08-31",
   "compatibility_flags": ["nodejs_compat"],
   "assets": {
@@ -11,15 +17,15 @@
     "run_worker_first": ["/health", "/v1/*"]
   },
   "vars": {
-    "FLEET_ACCESS_ISSUER": "https://replace-with-team.cloudflareaccess.com",
-    "FLEET_ACCESS_AUDIENCE": "replace-with-access-application-aud",
-    "FLEET_ACCESS_JWKS_URL": "https://replace-with-team.cloudflareaccess.com/cdn-cgi/access/certs"
+    "FLEET_ACCESS_ISSUER": "https://workslo.cloudflareaccess.com",
+    "FLEET_ACCESS_AUDIENCE": "bb6bfbf478f4650dd587009161459616cece8ecb032d5dd0a6e7090ad21fa2fb",
+    "FLEET_ACCESS_JWKS_URL": "https://workslo.cloudflareaccess.com/cdn-cgi/access/certs"
   },
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "fleet-state",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "7132d7a7-6b2b-4caf-8986-f91c2c3292dd",
       "migrations_dir": "worker/migrations"
     }
   ]

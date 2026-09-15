@@ -9,7 +9,8 @@
     "typecheck": "npm run types && tsc --noEmit && tsc --project worker/test/tsconfig.json --noEmit && tsc --project board/tsconfig.json --noEmit && tsc --project routines/tsconfig.json --noEmit && tsc --project tsconfig.node.json --noEmit",
     "test": "vitest run --config vitest.routines.config.ts && vitest run && node --test operations/*.test.mjs",
     "build": "vite build",
-    "deploy:dry": "wrangler deploy --dry-run",
+    "config:check": "node scripts/check-production-config.mjs",
+    "deploy:dry": "npm run config:check && wrangler deploy --dry-run",
     "check": "npm run typecheck && npm test && npm run build && npm run deploy:dry && npm run recovery:rehearse",
     "recovery:rehearse": "node operations/rehearse-recovery.mjs"
   },
