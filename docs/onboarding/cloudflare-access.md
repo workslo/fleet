@@ -8,7 +8,7 @@ gates.
 
 ## Application configuration
 
-Before an authorized deployment, replace the non-secret placeholders in
+The owner-approved production application values are checked into
 `wrangler.jsonc`:
 
 - `FLEET_ACCESS_ISSUER`: the exact HTTPS Access team origin, with no path.
@@ -28,12 +28,16 @@ Give Shane's identity policy browser access. Give each admitted agent its own
 Service Auth policy and distinct service token. Do not reuse an account API
 token as a Fleet participant credential.
 
-`wrangler.jsonc` disables both the `workers.dev` hostname and Preview URLs. Add
-the owner-approved canonical custom-domain route before deployment; the
-checked-in configuration deliberately names no production hostname. Do not
+`wrangler.jsonc` disables both the `workers.dev` hostname and Preview URLs and
+names `fleet.workslo.ai` as the sole canonical custom-domain route. Do not
 re-enable either alternate hostname unless it receives an equivalent Access
 application and policy. An unprotected alternate hostname creates an
 unintended public entry point and configuration drift.
+
+`npm run config:check` guards these checked-in values and the load-bearing
+`run_worker_first` routes against accidental drift before a dry run or deploy.
+It does not authorize a deployment: owner approval, review of the exact commit,
+and provider read-back remain separate gates.
 
 ## Explicit principal enrollment
 
