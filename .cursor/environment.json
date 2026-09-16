@@ -1,0 +1,10 @@
+{
+  "name": "Fleet",
+  "install": "bash .cursor/install.sh",
+  "terminals": [
+    {
+      "name": "wrangler-dev",
+      "command": "bash .cursor/dev.sh"
+    }
+  ]
+}
