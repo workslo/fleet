@@ -75,6 +75,10 @@ function principalFromPayload(payload: JWTPayload, issuer: string): Principal | 
     : null;
 }
 
+function isJwtType(value: string): boolean {
+  return value.replace(/^application\//i, "").toUpperCase() === "JWT";
+}
+
 function jwksUnavailable(caught: unknown): boolean {
   if (caught instanceof TypeError || caught instanceof SyntaxError) return true;
   if (!caught || typeof caught !== "object") return false;
@@ -116,14 +120,18 @@ async function resolveAccessCaller(request: Request, env: Env): Promise<Actor | 
 
   try {
     const jwks = jwksResolver(config.jwksUrl);
-    const { payload } = await jwtVerify(token, jwks, {
+    // Access application tokens carry no `typ` header, so it cannot be required.
+    // When one is present it must still name a JWT.
+    const { payload, protectedHeader } = await jwtVerify(token, jwks, {
       algorithms: ["RS256"],
       audience: config.audience,
       issuer: config.issuer,
       requiredClaims: ["aud", "exp", "iss", "sub", "type"],
       clockTolerance: 5,
-      typ: "JWT",
     });
+    if (protectedHeader.typ !== undefined && !isJwtType(protectedHeader.typ)) {
+      return error("unauthorized", "Cloudflare Access application token is invalid", 401);
+    }
     const principal = principalFromPayload(payload, config.issuer);
     return principal
       ? activeActor(env, principal)

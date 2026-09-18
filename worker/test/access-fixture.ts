@@ -26,7 +26,8 @@ export async function accessHeaders(actorId: string): Promise<Headers> {
     ? { sub: principal.subject, type: "app" }
     : { common_name: principal.subject, sub: "", type: "app" };
   const token = await new SignJWT(claims)
-    .setProtectedHeader({ alg: "RS256", kid: keyId, typ: "JWT" })
+    // Real Access application tokens carry no `typ` header.
+    .setProtectedHeader({ alg: "RS256", kid: keyId })
     .setIssuer(testAccessIssuer)
     .setAudience(testAccessAudience)
     .setIssuedAt(now)

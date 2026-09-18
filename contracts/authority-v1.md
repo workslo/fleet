@@ -6,8 +6,9 @@ request bodies do not establish authority.
 Production uses the Cloudflare Access application token from
 `Cf-Access-Jwt-Assertion`. The Worker verifies the RS256 signature against the
 configured fixed JWKS URL and requires the configured issuer, Fleet application
-audience, expiry, any present not-before boundary, a JWT protected type, and an
-application token `type` of `app`. Configuration or claim ambiguity fails
+audience, expiry, any present not-before boundary, and an application token `type` of
+`app`. Access issues application tokens without a protected `typ` header; when
+one is present it must name a JWT. Configuration or claim ambiguity fails
 closed. The Access issuer is configuration, never a value discovered from the
 submitted token.
 

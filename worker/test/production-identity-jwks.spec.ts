@@ -22,7 +22,7 @@ beforeAll(async () => {
   publicJwk = { ...await exportJWK(pair.publicKey), alg: "RS256", kid: keyId, use: "sig" };
   const now = Math.floor(Date.now() / 1_000);
   accessToken = await new SignJWT({ common_name: subject, sub: "", type: "app" })
-    .setProtectedHeader({ alg: "RS256", kid: keyId, typ: "JWT" })
+    .setProtectedHeader({ alg: "RS256", kid: keyId })
     .setIssuer(issuer)
     .setAudience(audience)
     .setIssuedAt(now)
