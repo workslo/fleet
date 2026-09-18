@@ -28,7 +28,11 @@ async function token(
   const algorithm = options.algorithm ?? "RS256";
   const key = algorithm === "RS256" ? signingKey : await generateSecret("HS256");
   return new SignJWT({ ...claims, type: options.tokenType ?? "app" })
-    .setProtectedHeader({ alg: algorithm, kid: keyId, typ: options.protectedType ?? "JWT" })
+    .setProtectedHeader(
+      options.protectedType === undefined
+        ? { alg: algorithm, kid: keyId }
+        : { alg: algorithm, kid: keyId, typ: options.protectedType },
+    )
     .setIssuer(options.issuer ?? issuer)
     .setAudience(options.audience ?? audience)
     .setIssuedAt(now)
@@ -197,6 +201,20 @@ describe("Fleet production identity", () => {
     const response = await apiRequest("/v1/me", await makeToken());
     expect(response.status).toBe(401);
     expect(await response.json()).toMatchObject({ error: "unauthorized" });
+  });
+
+  it("accepts a token without a protected typ header, as Cloudflare Access issues them", async () => {
+    const response = await apiRequest("/v1/me", await token({ common_name: "codex-primary.access", sub: "" }));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ actor: { id: "codex" } });
+  });
+
+  it("accepts a token whose protected typ names a JWT", async () => {
+    const response = await apiRequest(
+      "/v1/me",
+      await token({ common_name: "codex-primary.access", sub: "" }, { protectedType: "JWT" }),
+    );
+    expect(response.status).toBe(200);
   });
 
   it("accepts an audience array containing the configured Fleet audience", async () => {
