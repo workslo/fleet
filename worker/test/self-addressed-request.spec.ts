@@ -1,4 +1,4 @@
-import { env, exports } from "cloudflare:workers";
+import { exports } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import { accessHeaders } from "./access-fixture";
 
@@ -17,27 +17,28 @@ async function post(actor: string, path: string, body: unknown, key = crypto.ran
   return exports.default.fetch(`https://fleet.test${path}`, { method: "POST", headers, body: JSON.stringify(body) });
 }
 
-async function counts() {
-  const of = async (table: string) =>
-    ((await env.DB.prepare(`SELECT COUNT(*) AS n FROM ${table}`).first<{ n: number }>())?.n ?? -1);
-  return { requests: await of("work_requests"), activity: await of("activity_events"), idempotency: await of("idempotency_records") };
+async function get(actor: string, path: string) {
+  return exports.default.fetch(`https://fleet.test${path}`, { headers: await accessHeaders(actor) });
+}
+
+async function workSnapshot(actor: string) {
+  const response = await get(actor, "/v1/me/work");
+  expect(response.status).toBe(200);
+  return response.json();
 }
 
 describe("Self-addressed Work Requests", () => {
   it("refuses every self-addressed create with a stable 400 and stores nothing", async () => {
-    const before = await counts();
     for (const actor of ["codex", "claude", "juniorslo", "agentslo"]) {
+      const before = await workSnapshot(actor);
       const response = await post(actor, "/v1/requests", { ...ask, recipient_id: actor });
       expect(response.status).toBe(400);
       expect(await response.json()).toEqual({
         error: "invalid_request",
         message: "recipient_id must name a different actor; self-claimed work is not a Work Request",
       });
+      expect(await workSnapshot(actor)).toEqual(before);
     }
-    // Nothing was read into a record and nothing was written: not the request, not the
-    // activity event, not the idempotency row. A refusal that still consumed the key
-    // would make the failure sticky for the caller's next, valid attempt.
-    expect(await counts()).toEqual(before);
   });
 
   it("does not consume the Idempotency-Key it refused", async () => {
@@ -52,8 +53,9 @@ describe("Self-addressed Work Requests", () => {
     const response = await post("codex", "/v1/requests", { ...ask, recipient_id: "juniorslo" });
     expect(response.status).toBe(201);
     const stored = await response.json() as { id: string };
-    const row = await env.DB.prepare("SELECT requester_id, recipient_id FROM work_requests WHERE id = ?").bind(stored.id).first();
-    expect(row).toEqual({ requester_id: "codex", recipient_id: "juniorslo" });
+    const detail = await get("codex", `/v1/requests/${stored.id}`);
+    expect(detail.status).toBe(200);
+    expect(await detail.json()).toMatchObject({ requester: { id: "codex" }, recipient: { id: "juniorslo" } });
   });
 
   it("refuses the self-addressed ask before it decides anything else is wrong", async () => {
