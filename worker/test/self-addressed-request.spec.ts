@@ -27,6 +27,47 @@ async function workSnapshot(actor: string) {
   return response.json();
 }
 
+async function transition(actor: string, id: string, action: string, version: number, body: unknown = {}) {
+  const headers = await accessHeaders(actor);
+  headers.set("Content-Type", "application/json");
+  headers.set("Idempotency-Key", crypto.randomUUID());
+  headers.set("If-Match", `"${version}"`);
+  return exports.default.fetch(`https://fleet.test/v1/requests/${id}/${action}`, { method: "POST", headers, body: JSON.stringify(body) });
+}
+
+async function obligationIds(actor: string) {
+  const work = await workSnapshot(actor) as { obligations: { source: string; request_id?: string }[] };
+  return work.obligations.map((entry) => entry.request_id);
+}
+
+// Setup only. Migration 0007 is insert-scoped and preserves rows that predate it, so the only
+// honest way to stage one of those rows is to lift the shipped trigger, insert, and put it back.
+// The trigger is read from sqlite_master rather than retyped here, so this setup cannot drift
+// from the migration it is reasoning about; the last assertion proves the floor came back.
+async function preservedSelfAddressedRequest(actor: string, state: "Pending" | "Accepted" = "Pending") {
+  const trigger = await env.DB.prepare(
+    "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'work_request_recipient_is_not_requester'",
+  ).first<{ sql: string }>();
+  expect(trigger?.sql).toBeTruthy();
+  const id = `preserved-${crypto.randomUUID()}`;
+  const now = new Date().toISOString();
+  await env.DB.prepare("DROP TRIGGER work_request_recipient_is_not_requester").run();
+  await env.DB.prepare(
+    `INSERT INTO work_requests (id, project_id, requester_id, recipient_id, title, detail, state, version, created_at, updated_at)
+     VALUES (?, NULL, ?, ?, ?, ?, 'Pending', 1, ?, ?)`,
+  ).bind(id, actor, actor, ask.title, ask.detail, now, now).run();
+  await env.DB.prepare(trigger!.sql).run();
+  if (state === "Accepted") {
+    await env.DB.prepare("UPDATE work_requests SET state = 'Accepted', accepted_at = ?, accepted_scope_json = ? WHERE id = ?")
+      .bind(now, JSON.stringify({ title: ask.title, detail: ask.detail, artifact: null }), id).run();
+  }
+  await expect(env.DB.prepare(
+    `INSERT INTO work_requests (id, requester_id, recipient_id, title, detail, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).bind(`${id}-floor`, actor, actor, ask.title, ask.detail, now, now).run()).rejects.toThrow();
+  return id;
+}
+
 describe("Self-addressed Work Requests", () => {
   it("refuses every self-addressed create with a stable 400 and stores nothing", async () => {
     for (const actor of ["codex", "claude", "juniorslo", "agentslo"]) {
@@ -109,5 +150,57 @@ describe("Self-addressed Work Requests", () => {
     const response = await post("codex", "/v1/requests", { ...ask, recipient_id: "nobody" });
     expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({ message: expect.stringContaining("active actor") });
+  });
+
+  it("refuses to accept a preserved self-addressed request, and changes nothing by refusing", async () => {
+    // workslo/fleet#8, the lifecycle half: the insert floor preserves rows that predate it, and a
+    // preserved Pending row is one accept away from the obligation the rule exists to prevent.
+    const id = await preservedSelfAddressedRequest("codex");
+    const before = await workSnapshot("codex");
+
+    const response = await transition("codex", id, "accept", 1);
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: "conflict",
+      message: "a self-addressed work request cannot be accepted or worked; it can only be ended",
+    });
+
+    const detail = await get("codex", `/v1/requests/${id}`);
+    expect(detail.status).toBe(200);
+    expect(await detail.json()).toMatchObject({ state: "Pending", version: 1 });
+    expect(await workSnapshot("codex")).toEqual(before);
+    expect(await obligationIds("codex")).not.toContain(id);
+  });
+
+  it("still lets the sole participant end a preserved self-addressed request", async () => {
+    // Quarantine, not a trap: the row can always be retired by the actor it belongs to, so
+    // nobody needs a production-data change to clear one.
+    const id = await preservedSelfAddressedRequest("codex");
+    const declined = await transition("codex", id, "decline", 1, { reason: "Self-claimed work is not a Work Request." });
+    expect(declined.status).toBe(200);
+    expect(await declined.json()).toMatchObject({ state: "Declined", version: 2 });
+  });
+
+  it("lets a preserved self-addressed obligation be ended, and refuses to work it in place", async () => {
+    const id = await preservedSelfAddressedRequest("codex", "Accepted");
+    expect(await obligationIds("codex")).toContain(id);
+
+    const blocked = await transition("codex", id, "block", 1, { reason: "waiting on myself", resolution_condition: "never" });
+    expect(blocked.status).toBe(409);
+    expect(await blocked.json()).toMatchObject({ error: "conflict", message: expect.stringContaining("self-addressed") });
+
+    const fulfilled = await transition("codex", id, "fulfill", 1, {});
+    expect(fulfilled.status).toBe(200);
+    expect(await obligationIds("codex")).not.toContain(id);
+  });
+
+  it("leaves an ordinary request's transitions alone", async () => {
+    // KNOWN-GOOD: a quarantine that also refuses valid pairs is an outage, not a fix.
+    const created = await post("codex", "/v1/requests", { ...ask, recipient_id: "juniorslo" });
+    expect(created.status).toBe(201);
+    const { id } = await created.json() as { id: string };
+    const accepted = await transition("juniorslo", id, "accept", 1);
+    expect(accepted.status).toBe(200);
+    expect(await accepted.json()).toMatchObject({ state: "Accepted", version: 2 });
   });
 });

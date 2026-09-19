@@ -36,7 +36,11 @@ recipient: a Work Request is a bounded ask from one agent to another, and
 self-claimed work is its own obligation source, taken through an authorized Work
 Item or an Active Project Owner's standing next action. A self-addressed create
 is refused before anything is stored, and D1 refuses the row directly so import
-and recovery paths cannot bypass the gate.
+and recovery paths cannot bypass the gate. The D1 floor is insert-scoped, so a
+self-addressed row written before it is preserved rather than rewritten; such a
+row is quarantined instead. Its only remaining transitions are the ones that end
+it — the actor it belongs to may decline, withdraw, expire, fulfill, or return
+it, and may never accept or work it in place.
 
 A requester creates a `Pending` request; only its recipient may accept or
 fulfill it. Pending visibility creates no obligation. Acceptance stores the
