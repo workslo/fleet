@@ -31,6 +31,13 @@ associated with an Active Fleet Project or stand alone as bounded ad hoc work.
 A standalone request does not create a Fleet Project and does not import the
 linked personal artifact into Fleet.
 
+A request is addressed to a different actor. A requester may not name itself as
+recipient: a Work Request is a bounded ask from one agent to another, and
+self-claimed work is its own obligation source, taken through an authorized Work
+Item or an Active Project Owner's standing next action. A self-addressed create
+is refused before anything is stored, and D1 refuses the row directly so import
+and recovery paths cannot bypass the gate.
+
 A requester creates a `Pending` request; only its recipient may accept or
 fulfill it. Pending visibility creates no obligation. Acceptance stores the
 exact title, detail, and deliberately shared artifact link as the accepted
