@@ -1,4 +1,4 @@
-import { exports } from "cloudflare:workers";
+import { env, exports } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import { accessHeaders } from "./access-fixture";
 
@@ -47,6 +47,45 @@ describe("Self-addressed Work Requests", () => {
     const retry = await post("codex", "/v1/requests", { ...ask, recipient_id: "juniorslo" }, key);
     expect(retry.status).toBe(201);
     expect(await retry.json()).toMatchObject({ state: "Pending", version: 1 });
+  });
+
+  it("replays a matching response committed before the self-address refusal", async () => {
+    const key = crypto.randomUUID();
+    const legacyResponse = {
+      id: "legacy-self-addressed-request",
+      requester: { id: "codex" },
+      recipient: { id: "codex" },
+      state: "Pending",
+      version: 1,
+    };
+    // Setup only: migration coverage proves legacy self-addressed rows survive. This
+    // record represents the response committed with one of those rows before the new
+    // Worker validation existed; behavior is still observed through the HTTP seam.
+    await env.DB.prepare(
+      `INSERT INTO idempotency_records
+        (actor_id, idempotency_key, method, path, request_hash, response_status, response_body)
+       VALUES ('codex', ?, 'POST', '/v1/requests', ?, 201, ?)`,
+    ).bind(
+      key,
+      "4fcf8f1ada9e1cd13cb1f06bc3eb0c06047f0c29ff48b2d94b27008d29617c85",
+      JSON.stringify(legacyResponse),
+    ).run();
+
+    const replay = await post("codex", "/v1/requests", { ...ask, recipient_id: "codex" }, key);
+    expect(replay.status).toBe(201);
+    expect(await replay.json()).toEqual(legacyResponse);
+  });
+
+  it("keeps the normal idempotency conflict for an already-consumed key", async () => {
+    const key = crypto.randomUUID();
+    expect((await post("codex", "/v1/requests", { ...ask, recipient_id: "juniorslo" }, key)).status).toBe(201);
+
+    const conflict = await post("codex", "/v1/requests", { ...ask, recipient_id: "codex" }, key);
+    expect(conflict.status).toBe(409);
+    expect(await conflict.json()).toEqual({
+      error: "idempotency_conflict",
+      message: "Idempotency-Key was reused with a different payload",
+    });
   });
 
   it("still passes a request between two distinct active actors", async () => {

@@ -183,14 +183,14 @@ export async function createRequest(request: Request, env: Env, caller: Actor, r
   const input = requestInput(body);
   if (!input) return error("invalid_request", "project_id is optional; recipient_id, title, and detail are required; caller identity fields are forbidden", 400);
   if (routeProjectId !== undefined && input.project_id !== undefined) return error("invalid_request", "project_id is supplied by the project-scoped route", 400);
-  // A Work Request is a bounded ask from one agent to another (Working Agreement §4).
-  // Self-claimed work is its own obligation source and travels the Work Item /
-  // owner-next-action path, so a self-addressed ask is refused here before anything is
-  // read or written: no idempotency lookup, no request row, no activity event.
-  if (input.recipient_id === caller.id) return error("invalid_request", "recipient_id must name a different actor; self-claimed work is not a Work Request", 400);
-  const projectId = routeProjectId ?? input.project_id ?? null;
   const idempotency = await priorReplay(env, caller, request, body);
   if (isResponse(idempotency)) return idempotency;
+  // A Work Request is a bounded ask from one agent to another (Working Agreement §4).
+  // Self-claimed work is its own obligation source and travels the Work Item /
+  // owner-next-action path. Honor a response committed before this rule existed, then
+  // refuse a new self-addressed ask before writing an idempotency, request or activity row.
+  if (input.recipient_id === caller.id) return error("invalid_request", "recipient_id must name a different actor; self-claimed work is not a Work Request", 400);
+  const projectId = routeProjectId ?? input.project_id ?? null;
   if (projectId !== null && !await activeProject(env, projectId)) return error("conflict", "project-linked work requests require an active project", 409);
   if (!await activeActor(env, input.recipient_id)) return error("invalid_request", "recipient_id must be an active actor", 400);
   const id = crypto.randomUUID();
