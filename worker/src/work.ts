@@ -183,9 +183,14 @@ export async function createRequest(request: Request, env: Env, caller: Actor, r
   const input = requestInput(body);
   if (!input) return error("invalid_request", "project_id is optional; recipient_id, title, and detail are required; caller identity fields are forbidden", 400);
   if (routeProjectId !== undefined && input.project_id !== undefined) return error("invalid_request", "project_id is supplied by the project-scoped route", 400);
-  const projectId = routeProjectId ?? input.project_id ?? null;
   const idempotency = await priorReplay(env, caller, request, body);
   if (isResponse(idempotency)) return idempotency;
+  // A Work Request is a bounded ask from one agent to another (Working Agreement §4).
+  // Self-claimed work is its own obligation source and travels the Work Item /
+  // owner-next-action path. Honor a response committed before this rule existed, then
+  // refuse a new self-addressed ask before writing an idempotency, request or activity row.
+  if (input.recipient_id === caller.id) return error("invalid_request", "recipient_id must name a different actor; self-claimed work is not a Work Request", 400);
+  const projectId = routeProjectId ?? input.project_id ?? null;
   if (projectId !== null && !await activeProject(env, projectId)) return error("conflict", "project-linked work requests require an active project", 409);
   if (!await activeActor(env, input.recipient_id)) return error("invalid_request", "recipient_id must be an active actor", 400);
   const id = crypto.randomUUID();
@@ -217,6 +222,10 @@ export async function createRequest(request: Request, env: Env, caller: Actor, r
 
 type Transition = RequestTransition | "accept" | "fulfill";
 type TransitionInput = { reason?: string; unfinished_work?: string; resolution_condition?: string; summary?: string; evidence?: EvidenceInput[] };
+
+// The transitions that end a request, named once so the quarantine in transitionRequest and
+// the resolution it writes cannot drift apart.
+const REQUEST_ENDINGS: Partial<Record<Transition, RequestEnding>> = { fulfill: "Fulfilled", return: "Returned", decline: "Declined", withdraw: "Withdrawn", expire: "Expired" };
 
 function transitionInput(action: Transition, body: unknown): TransitionInput | null {
   if (!object(body)) return null;
@@ -252,6 +261,15 @@ export async function transitionRequest(request: Request, env: Env, caller: Acto
     : action === "expire" ? current.requester_id === caller.id || current.recipient_id === caller.id
     : current.recipient_id === caller.id;
   if (!permitted) return error("forbidden", "only the request participant authorized for this transition may record it", 403);
+  // #8, the other half. Migration 0007 refuses new self-addressed rows but deliberately
+  // preserves any that predate it, and a preserved row is one its sole participant could still
+  // accept into the self-obligation this rule exists to prevent. So the only transitions left
+  // open on one are the ones that end it: it can be retired, never accepted or worked. Placed
+  // after the authority check so a non-participant learns nothing about the row, and before the
+  // version check so the refusal is the same answer at every version.
+  if (current.requester_id === current.recipient_id && !(action in REQUEST_ENDINGS)) {
+    return error("conflict", "a self-addressed work request cannot be accepted or worked; it can only be ended", 409);
+  }
   if (current.version !== version) return error("precondition_failed", "work request version is stale", 412);
   const requiredState = ["accept", "decline", "withdraw", "expire"].includes(action) ? "Pending" : "Accepted";
   if (current.state !== requiredState) return error("conflict", `work request must be ${requiredState}`, 409);
@@ -261,10 +279,9 @@ export async function transitionRequest(request: Request, env: Env, caller: Acto
   if (requiredState === "Pending" && action !== "expire" && due) return error("conflict", "the invitation deadline has passed; record its expiry", 409);
   if (action === "unblock" && current.blocker_json === null) return error("conflict", "work request has no current blocker", 409);
 
-  const ending: Partial<Record<Transition, RequestEnding>> = { fulfill: "Fulfilled", return: "Returned", decline: "Declined", withdraw: "Withdrawn", expire: "Expired" };
-  const state = ending[action] ?? (action === "accept" ? "Accepted" : current.state);
+  const state = REQUEST_ENDINGS[action] ?? (action === "accept" ? "Accepted" : current.state);
   const evidence = input.evidence ?? [];
-  const resolution: RequestResolution | null = ending[action] ? {
+  const resolution: RequestResolution | null = REQUEST_ENDINGS[action] ? {
     state: state as RequestEnding, actor: { id: caller.id }, at: now,
     reason: action === "expire" ? "The disclosed invitation acceptance deadline passed." : input.reason ?? null,
     unfinished_work: input.unfinished_work ?? null, evidence,

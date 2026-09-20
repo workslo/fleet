@@ -17,8 +17,8 @@ All errors have this shape:
 | `POST /v1/projects/:id/authorize` | Shane authorizes with `proposed_owner_id`, `outcome`, `scope`, `exclusions`, `delegated_actions`, `gates`, `validation_evidence`, and `plan`. |
 | `POST /v1/projects/:id/owner-accept` | The proposed owner accepts with `{}`. |
 | `GET /v1/projects/:id` | Read one project card. |
-| `POST /v1/projects/:id/requests` | Create a `Pending` Work Request with non-blank `recipient_id`, `title`, and `detail`; `project_id` comes only from the route and caller-identity fields are rejected. |
-| `POST /v1/requests` | Create a `Pending` Work Request with `recipient_id`, `title`, `detail`, optional `artifact: { uri, summary }`, and optional `project_id`; omission or `null` makes it standalone. |
+| `POST /v1/projects/:id/requests` | Create a `Pending` Work Request with non-blank `recipient_id`, `title`, and `detail`; `project_id` comes only from the route and caller-identity fields are rejected. `recipient_id` must name an actor other than the caller. |
+| `POST /v1/requests` | Create a `Pending` Work Request with `recipient_id`, `title`, `detail`, optional `artifact: { uri, summary }`, and optional `project_id`; omission or `null` makes it standalone. `recipient_id` must name an actor other than the caller. |
 | `GET /v1/requests/:id` | Read one Work Request, its frozen `accepted_scope`, and fulfillment `evidence`. |
 | `POST /v1/requests/:id/accept` | The recipient accepts with `{}` and a quoted request `If-Match` version. |
 | `POST /v1/requests/:id/fulfill` | The recipient fulfills with optional `evidence: [{ uri, summary }]` and a quoted request `If-Match` version. |
@@ -80,6 +80,12 @@ Acceptance snapshots the current request title, detail, and artifact link into
 Only the recipient may accept or fulfill. Project-linked requests continue to
 require an Active project; standalone requests return `project_id: null` and
 create no Fleet Project.
+
+A create whose `recipient_id` equals the caller returns `400 invalid_request`
+on both request routes and stores nothing — no request, no activity entry, and
+no idempotency record, so the refused `Idempotency-Key` stays usable for the
+caller's next, valid attempt. Self-claimed work is not a Work Request; it is
+recorded through a Work Item or an Active Project Owner's next action.
 
 `GET /v1/requests/:id` exposes fulfillment Evidence as
 `evidence: [{ uri, summary, created_at }]`. Work snapshots remain summaries;

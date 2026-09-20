@@ -37,6 +37,7 @@ export default defineConfig({
       workerProject("worker", ["worker/test/**/*.spec.ts"], validIssuer, [
         "worker/test/needs-shane-migration.spec.ts",
         "worker/test/request-lifecycle-migration.spec.ts",
+        "worker/test/self-addressed-request-migration.spec.ts",
         "worker/test/standalone-review-migration.spec.ts",
         "worker/test/production-identity-jwks.spec.ts",
         "worker/test/production-identity-misconfig.spec.ts",
@@ -84,6 +85,13 @@ export default defineConfig({
           miniflare: { bindings: { TEST_MIGRATIONS: await readD1Migrations(path.join(projectRoot, "worker/migrations")) } },
         }))],
         test: { name: "worker-needs-shane-migration", include: ["worker/test/needs-shane-migration.spec.ts"] },
+      }),
+      defineProject({
+        plugins: [cloudflareTest(async () => ({
+          wrangler: { configPath: "./wrangler.jsonc" },
+          miniflare: { bindings: { TEST_MIGRATIONS: await readD1Migrations(path.join(projectRoot, "worker/migrations")) } },
+        }))],
+        test: { name: "worker-self-addressed-migration", include: ["worker/test/self-addressed-request-migration.spec.ts"] },
       }),
     ],
   },
