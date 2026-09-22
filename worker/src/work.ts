@@ -1,6 +1,14 @@
 import type { RequestBlocker, RequestResolution, RequestEnding, RequestTransition } from "../../contracts/request-lifecycle";
 import { error, isResponse, json, requestJson } from "./http";
 import { decisionsForActor, decisionsForSource } from "./decisions";
+import {
+  IDEMPOTENCY_KEY_MESSAGE,
+  V1_LIMITS,
+  boundedHttpUri,
+  boundedIdentifier,
+  boundedText,
+  idempotencyKey,
+} from "./limits";
 import { principalValues } from "./types";
 import type { Actor, Env, WorkRequestRow } from "./types";
 
@@ -22,32 +30,60 @@ function object(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function httpUri(value: unknown): value is string {
-  if (typeof value !== "string" || value.trim().length === 0) return false;
-  try {
-    const protocol = new URL(value).protocol;
-    return protocol === "http:" || protocol === "https:";
-  } catch {
-    return false;
-  }
+// #9. Decoders return the trimmed, bounded value instead of casting the caller's object,
+// so the bytes written to D1 are the bytes that were validated.
+function linkInput(value: unknown): ArtifactInput | null {
+  if (!object(value)) return null;
+  const uri = boundedHttpUri(value.uri);
+  const summary = boundedText(value.summary, V1_LIMITS.summary);
+  return uri !== null && summary !== null ? { uri, summary } : null;
 }
 
 function requestInput(value: unknown): RequestInput | null {
   if (!object(value)) return null;
   if ("requester_id" in value || "actor_id" in value || "agent_id" in value) return null;
-  const input = value as Partial<RequestInput>;
-  const artifact = input.artifact;
-  const validArtifact = artifact === undefined || (
-    object(artifact) && httpUri(artifact.uri) &&
-    typeof artifact.summary === "string" && artifact.summary.trim().length > 0
-  );
-  const validExpiry = input.expires_at === undefined || input.expires_at === null || invitationDeadline(input.expires_at) !== null;
-  const validProject = input.project_id === undefined || input.project_id === null || (typeof input.project_id === "string" && input.project_id.trim().length > 0);
-  return validExpiry && validProject && typeof input.recipient_id === "string" && input.recipient_id.trim().length > 0 &&
-    typeof input.title === "string" && input.title.trim().length > 0 &&
-    typeof input.detail === "string" && input.detail.trim().length > 0 && validArtifact
-    ? input as RequestInput
-    : null;
+  const recipient_id = boundedIdentifier(value.recipient_id);
+  const title = boundedText(value.title, V1_LIMITS.title);
+  const detail = boundedText(value.detail, V1_LIMITS.detail);
+  if (recipient_id === null || title === null || detail === null) return null;
+
+  let artifact: ArtifactInput | undefined;
+  if ("artifact" in value && value.artifact !== undefined) {
+    const link = linkInput(value.artifact);
+    if (link === null) return null;
+    artifact = link;
+  }
+
+  // `undefined` (absent) and `null` (explicitly none) are distinct to createRequest and to
+  // the project-scoped route, so both are preserved rather than collapsed.
+  let project_id: string | null | undefined;
+  if ("project_id" in value && value.project_id !== undefined) {
+    if (value.project_id === null) project_id = null;
+    else {
+      const id = boundedIdentifier(value.project_id);
+      if (id === null) return null;
+      project_id = id;
+    }
+  }
+
+  let expires_at: string | null | undefined;
+  if ("expires_at" in value && value.expires_at !== undefined) {
+    if (value.expires_at === null) expires_at = null;
+    else {
+      const deadline = invitationDeadline(value.expires_at);
+      if (deadline === null) return null;
+      expires_at = deadline;
+    }
+  }
+
+  return {
+    recipient_id,
+    title,
+    detail,
+    ...(artifact !== undefined ? { artifact } : {}),
+    ...(project_id !== undefined ? { project_id } : {}),
+    ...(expires_at !== undefined ? { expires_at } : {}),
+  };
 }
 
 function invitationDeadline(value: unknown): string | null {
@@ -59,8 +95,10 @@ function invitationDeadline(value: unknown): string | null {
 
 function pullCandidateInput(value: unknown): PullCandidateInput | null {
   if (!object(value)) return null;
-  const input = value as Partial<PullCandidateInput>;
-  return typeof input.project_id === "string" && typeof input.title === "string" && typeof input.detail === "string" ? input as PullCandidateInput : null;
+  const project_id = boundedIdentifier(value.project_id);
+  const title = boundedText(value.title, V1_LIMITS.title);
+  const detail = boundedText(value.detail, V1_LIMITS.detail);
+  return project_id !== null && title !== null && detail !== null ? { project_id, title, detail } : null;
 }
 
 function fulfillmentEvidence(value: unknown): EvidenceInput[] | null {
@@ -70,11 +108,14 @@ function fulfillmentEvidence(value: unknown): EvidenceInput[] | null {
   // malformed shape like any other and must fail validation.
   if (raw !== undefined && !Array.isArray(raw)) return null;
   const evidence = raw ?? [];
-  return evidence.every((entry) => object(entry) &&
-    httpUri(entry.uri) &&
-    typeof entry.summary === "string" && entry.summary.trim().length > 0)
-    ? evidence as EvidenceInput[]
-    : null;
+  if (evidence.length > V1_LIMITS.evidence_items) return null;
+  const links: EvidenceInput[] = [];
+  for (const entry of evidence) {
+    const link = linkInput(entry);
+    if (link === null) return null;
+    links.push(link);
+  }
+  return links;
 }
 
 async function sha256(value: string): Promise<string> {
@@ -84,8 +125,8 @@ async function sha256(value: string): Promise<string> {
 }
 
 async function priorReplay(env: Env, caller: Actor, request: Request, body: unknown): Promise<{ key: string; hash: string } | Response> {
-  const key = request.headers.get("Idempotency-Key");
-  if (!key) return error("invalid_request", "Idempotency-Key is required", 400);
+  const key = idempotencyKey(request);
+  if (!key) return error("invalid_request", IDEMPOTENCY_KEY_MESSAGE, 400);
   const hash = await sha256(JSON.stringify(body));
   const path = new URL(request.url).pathname;
   const existing = await env.DB.prepare(
@@ -235,15 +276,21 @@ function transitionInput(action: Transition, body: unknown): TransitionInput | n
     block: ["reason", "resolution_condition"], unblock: ["summary"],
   };
   if (Object.keys(body).some((key) => !fields[action].includes(key))) return null;
+  // #9. `summary` is a short note and the rest are explanations; both were previously
+  // capped at 4000 UTF-16 code units and are now capped in UTF-8 bytes, which is what D1
+  // stores. The normalized values are returned, not the caller's object.
+  const normalized: Record<string, unknown> = {};
   for (const field of fields[action].filter((key) => key !== "evidence")) {
-    if (typeof body[field] !== "string" || !body[field].trim() || body[field].length > 4000) return null;
+    const text = boundedText(body[field], field === "summary" ? V1_LIMITS.summary : V1_LIMITS.detail);
+    if (text === null) return null;
+    normalized[field] = text;
   }
   if (fields[action].includes("evidence")) {
     const evidence = fulfillmentEvidence(body);
-    if (!evidence || evidence.length > 20) return null;
-    return { ...body, evidence } as TransitionInput;
+    if (!evidence) return null;
+    normalized.evidence = evidence;
   }
-  return body as TransitionInput;
+  return normalized as TransitionInput;
 }
 
 export async function transitionRequest(request: Request, env: Env, caller: Actor, requestId: string, action: Transition): Promise<Response> {

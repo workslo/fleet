@@ -96,6 +96,43 @@ New activity entries include a `principal` object alongside `actor`, preserving
 which enrolled human or service identity authenticated the mutation. Activity
 created before principal provenance was added may return `principal: null`.
 
+## V1 input limits
+
+Every V1 mutation route validates content and size, not only primitive type. A
+required field must be non-blank once trimmed and within its limit; the trimmed
+value is what Fleet stores and returns. A field that fails returns
+`400 invalid_request` before any D1 write, so the refused `Idempotency-Key`
+stays usable.
+
+Sizes are UTF-8 bytes.
+
+| Field class | Limit | Applies to |
+| --- | --- | --- |
+| `Idempotency-Key` | 255 | every mutation route |
+| identifier | 64 | `originator_id`, `recipient_id`, `proposed_owner_id`, `delegate_id`, `project_id`, `work_request_id` in a body |
+| slug | 64, canonical syntax | `slug` |
+| title | 200 | `title`, envelope `outcome` |
+| summary | 500 | artifact and evidence `summary`, transition and Needs Shane `summary`, each envelope list entry |
+| detail | 4000 | `detail`, `question`, `resolution_condition`, `reason`, `unfinished_work` |
+| plan | 20000 | authorization `plan` |
+| link | 2000, `http`/`https` only | artifact and evidence `uri` |
+| list | 20 evidence links, 50 entries per envelope list | `evidence`, `scope`, `exclusions`, `delegated_actions`, `gates`, `validation_evidence` |
+
+The canonical slug syntax is lowercase alphanumeric words joined by single
+hyphens, with no leading, trailing, or doubled hyphen — `fleet-v1-foundation`.
+Slugs are compared as stored; there is no case folding on lookup.
+
+An empty envelope list is a valid statement that the list is empty; a blank
+entry inside one is not. An absent optional field and an explicitly `null` one
+keep their existing distinct meanings; a present-but-blank value is a failure,
+not an omission.
+
+D1 carries an insert-scoped floor under these limits (migration 0008) so an
+import, a recovery replay, or a direct `INSERT` cannot store a blank or
+unbounded field while the Worker gate is bypassed. The floor is not retroactive:
+rows written before it are preserved as they stand, the same rule migration 0007
+follows. The HTTP boundary remains the surface that answers a caller.
+
 ## AgentWorkSnapshot
 
 `GET /v1/me/work` returns:
@@ -243,9 +280,9 @@ All transitions use `POST /v1/requests/:id/<action>`, the current quoted
 
 `accept` and `fulfill` retain their existing API shapes. Fulfillment now records
 an attributed resolution and clears any current blocker. Replacing a blocker
-records another attributed blocker event. Each explanation is nonblank and at
-most 4,000 characters. Return and fulfillment evidence permit at most 20 HTTP(S)
-links with nonblank summaries. Unknown transition fields fail closed.
+records another attributed blocker event. Each explanation is nonblank and
+bounded by the V1 input limits above. Return and fulfillment evidence permit at
+most 20 HTTP(S) links with nonblank, bounded summaries. Unknown transition fields fail closed.
 
 Stale versions and competing transitions return 412; invalid current state,
 premature expiry, or an elapsed invitation deadline return 409. Successful
