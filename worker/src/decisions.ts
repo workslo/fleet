@@ -1,5 +1,13 @@
 import type { CreateNeedsShane, NeedsShane, NeedsShaneEvidence, NeedsShaneKind } from "../../contracts/needs-shane";
 import { error, isResponse, json, requestJson } from "./http";
+import {
+  IDEMPOTENCY_KEY_MESSAGE,
+  V1_LIMITS,
+  boundedHttpUri,
+  boundedIdentifier,
+  boundedText,
+  idempotencyKey,
+} from "./limits";
 import { principalValues, type Actor, type Env } from "./types";
 
 type DecisionRow = {
@@ -26,24 +34,22 @@ function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function text(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
-
 function onlyKeys(value: Record<string, unknown>, keys: string[]) {
   return Object.keys(value).every((key) => keys.includes(key));
 }
 
-function validEvidence(value: unknown): value is NeedsShaneEvidence[] {
-  return Array.isArray(value) && value.length <= 20 && value.every((entry) => {
-    if (!object(entry) || !onlyKeys(entry, ["uri", "summary"]) || !text(entry.uri) || !text(entry.summary)) return false;
-    try {
-      const uri = new URL(entry.uri);
-      return uri.protocol === "https:" || uri.protocol === "http:";
-    } catch {
-      return false;
-    }
-  });
+// #9. Decodes rather than type-guards, so the trimmed, bounded links are what get stored.
+function evidenceLinks(value: unknown): NeedsShaneEvidence[] | null {
+  if (!Array.isArray(value) || value.length > V1_LIMITS.evidence_items) return null;
+  const links: NeedsShaneEvidence[] = [];
+  for (const entry of value) {
+    if (!object(entry) || !onlyKeys(entry, ["uri", "summary"])) return null;
+    const uri = boundedHttpUri(entry.uri);
+    const summary = boundedText(entry.summary, V1_LIMITS.summary);
+    if (uri === null || summary === null) return null;
+    links.push({ uri, summary });
+  }
+  return links;
 }
 
 function response(row: DecisionRow): NeedsShane {
@@ -68,8 +74,8 @@ async function rowById(env: Env, id: string) {
 }
 
 async function replay(env: Env, caller: Actor, request: Request, body: unknown): Promise<Replay | Response> {
-  const key = request.headers.get("Idempotency-Key");
-  if (!key?.trim()) return error("invalid_request", "Idempotency-Key is required", 400);
+  const key = idempotencyKey(request);
+  if (!key) return error("invalid_request", IDEMPOTENCY_KEY_MESSAGE, 400);
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(body)));
   const hash = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
   const previous = await env.DB.prepare(
@@ -130,12 +136,23 @@ export async function getDecision(env: Env, id: string): Promise<Response> {
 export async function createDecision(request: Request, env: Env, caller: Actor): Promise<Response> {
   const body = await requestJson(request);
   if (isResponse(body)) return body;
+  const question = object(body) ? boundedText(body.question, V1_LIMITS.detail) : null;
+  const resolutionCondition = object(body) ? boundedText(body.resolution_condition, V1_LIMITS.detail) : null;
+  const sourceProjectId = object(body) && body.work_request_id === undefined ? boundedIdentifier(body.project_id) : null;
+  const sourceRequestId = object(body) && body.project_id === undefined ? boundedIdentifier(body.work_request_id) : null;
   if (!object(body) || !onlyKeys(body, ["project_id", "work_request_id", "kind", "question", "resolution_condition"]) ||
-      !text(body.question) || !text(body.resolution_condition) || typeof body.kind !== "string" || !["decision", "action", "decision_and_action"].includes(body.kind) ||
-      !(text(body.project_id) && body.work_request_id === undefined || text(body.work_request_id) && body.project_id === undefined)) {
-    return error("invalid_request", "kind, question, resolution_condition, and exactly one project_id or work_request_id are required", 400);
+      question === null || resolutionCondition === null ||
+      typeof body.kind !== "string" || !["decision", "action", "decision_and_action"].includes(body.kind) ||
+      (sourceProjectId === null) === (sourceRequestId === null)) {
+    return error("invalid_request", "kind, question, resolution_condition, and exactly one project_id or work_request_id are required, each non-blank and within its V1 limit", 400);
   }
-  const input = body as CreateNeedsShane;
+  const input = {
+    kind: body.kind as CreateNeedsShane["kind"],
+    question,
+    resolution_condition: resolutionCondition,
+    ...(sourceProjectId !== null ? { project_id: sourceProjectId } : {}),
+    ...(sourceRequestId !== null ? { work_request_id: sourceRequestId } : {}),
+  } satisfies CreateNeedsShane;
   const key = await replay(env, caller, request, body);
   if (isResponse(key)) return key;
   let projectId = input.project_id ?? null;
@@ -173,11 +190,13 @@ export async function transitionDecision(request: Request, env: Env, caller: Act
   if (isResponse(body)) return body;
   const allowed = transition === "decide" ? ["choice", "summary", "evidence"]
     : transition === "delegate-action" ? ["delegate_id", "summary"] : ["summary", "evidence"];
-  if (!object(body) || !onlyKeys(body, allowed) || !text(body.summary) ||
+  const summary = object(body) ? boundedText(body.summary, V1_LIMITS.summary) : null;
+  const delegateId = object(body) && transition === "delegate-action" ? boundedIdentifier(body.delegate_id) : null;
+  const suppliedEvidence = object(body) && body.evidence !== undefined ? evidenceLinks(body.evidence) : [];
+  if (!object(body) || !onlyKeys(body, allowed) || summary === null || suppliedEvidence === null ||
       (transition === "decide" && body.choice !== "approved" && body.choice !== "declined") ||
-      (transition === "delegate-action" && !text(body.delegate_id)) ||
-      (body.evidence !== undefined && !validEvidence(body.evidence))) {
-    return error("invalid_request", "provide the transition fields, a non-blank summary, and valid HTTP evidence links", 400);
+      (transition === "delegate-action" && delegateId === null)) {
+    return error("invalid_request", "provide the transition fields, a non-blank bounded summary, and valid HTTP evidence links", 400);
   }
   const match = request.headers.get("If-Match")?.match(/^"([1-9]\d*)"$/);
   const version = Number(match?.[1]);
@@ -196,8 +215,8 @@ export async function transitionDecision(request: Request, env: Env, caller: Act
       : "this legacy state is preserved in history and has no supported transition", 409);
   }
   const now = new Date().toISOString();
-  const evidence = (body.evidence ?? []) as NeedsShaneEvidence[];
-  const outcome = { actor: { id: caller.id }, summary: body.summary, evidence, at: now };
+  const evidence = suppliedEvidence;
+  const outcome = { actor: { id: caller.id }, summary, evidence, at: now };
   const next = { ...current, version: version + 1, updated_at: now };
   if (transition === "decide") {
     if (current.kind === "action" || current.decision_json !== null) return error("conflict", "no decision is pending", 409);
@@ -206,10 +225,10 @@ export async function transitionDecision(request: Request, env: Env, caller: Act
   } else {
     if (response(current).action_status !== "pending") return error("conflict", "no action is ready for completion or delegation", 409);
     if (transition === "delegate-action") {
-      const delegate = await env.DB.prepare("SELECT id FROM actors WHERE id = ? AND active = 1 AND id != 'shane'").bind(body.delegate_id).first<{ id: string }>();
+      const delegate = await env.DB.prepare("SELECT id FROM actors WHERE id = ? AND active = 1 AND id != 'shane'").bind(delegateId).first<{ id: string }>();
       if (!delegate) return error("invalid_request", "delegate_id must name an active agent", 400);
       next.delegate_id = delegate.id;
-      next.delegation_json = JSON.stringify({ actor: { id: caller.id }, delegate: { id: delegate.id }, summary: body.summary, at: now });
+      next.delegation_json = JSON.stringify({ actor: { id: caller.id }, delegate: { id: delegate.id }, summary, at: now });
     } else {
       next.action_json = JSON.stringify(outcome);
       next.state = "Resolved";

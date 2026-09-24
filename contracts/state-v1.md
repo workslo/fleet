@@ -11,6 +11,11 @@ Proposed -> Authorized -> Active -> Awaiting Acceptance -> Closed
 `Paused` and `Canceled` are explicit exits. Health is separate from lifecycle
 state: `On Track`, `At Risk`, `Blocked`, or `Stale`.
 
+A project's `slug` is its stable, human-typed handle and carries a canonical
+syntax: lowercase alphanumeric words joined by single hyphens, at most 64 bytes,
+with no leading, trailing, or doubled hyphen. Slugs are unique and are compared
+as stored.
+
 `Proposed` records an idea without shared execution authority. `Authorized`
 means Shane accepted an envelope and is awaiting the proposed owner's consent.
 `Active` means that owner accepted. `Awaiting Acceptance` is an owner-submitted

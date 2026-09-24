@@ -1,5 +1,14 @@
 import { error, isResponse, json, requestJson } from "./http";
 import { decisionsForSource } from "./decisions";
+import {
+  IDEMPOTENCY_KEY_MESSAGE,
+  V1_LIMITS,
+  boundedIdentifier,
+  boundedSlug,
+  boundedText,
+  boundedTextArray,
+  idempotencyKey,
+} from "./limits";
 import { principalValues } from "./types";
 import type { Actor, AuthorizationInput, Env, ProjectRow } from "./types";
 
@@ -17,32 +26,40 @@ function actor(id: string | null) {
   return id ? { id } : null;
 }
 
-function strings(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+// #9. Every decoder below returns the trimmed, bounded value rather than casting the
+// caller's object, so what is written to D1 is what was validated.
+function envelopeList(value: unknown): string[] | null {
+  return boundedTextArray(value, V1_LIMITS.envelope_items, V1_LIMITS.summary);
 }
 
 function projectInput(value: unknown): ProjectInput | null {
   if (!value || typeof value !== "object") return null;
-  const input = value as Partial<ProjectInput>;
-  return typeof input.slug === "string" && typeof input.title === "string" && typeof input.originator_id === "string"
-    ? input as ProjectInput
+  const input = value as Record<string, unknown>;
+  const slug = boundedSlug(input.slug);
+  const title = boundedText(input.title, V1_LIMITS.title);
+  const originator_id = boundedIdentifier(input.originator_id);
+  return slug !== null && title !== null && originator_id !== null
+    ? { slug, title, originator_id }
     : null;
 }
 
 function authorizationInput(value: unknown): AuthorizationInput | null {
   if (!value || typeof value !== "object") return null;
-  const input = value as Partial<AuthorizationInput>;
+  const input = value as Record<string, unknown>;
+  const proposed_owner_id = boundedIdentifier(input.proposed_owner_id);
+  const outcome = boundedText(input.outcome, V1_LIMITS.summary);
+  const plan = boundedText(input.plan, V1_LIMITS.plan);
+  const scope = envelopeList(input.scope);
+  const exclusions = envelopeList(input.exclusions);
+  const delegated_actions = envelopeList(input.delegated_actions);
+  const gates = envelopeList(input.gates);
+  const validation_evidence = envelopeList(input.validation_evidence);
   if (
-    typeof input.proposed_owner_id !== "string" ||
-    typeof input.outcome !== "string" ||
-    typeof input.plan !== "string" ||
-    !strings(input.scope) ||
-    !strings(input.exclusions) ||
-    !strings(input.delegated_actions) ||
-    !strings(input.gates) ||
-    !strings(input.validation_evidence)
+    proposed_owner_id === null || outcome === null || plan === null ||
+    scope === null || exclusions === null || delegated_actions === null ||
+    gates === null || validation_evidence === null
   ) return null;
-  return input as AuthorizationInput;
+  return { proposed_owner_id, outcome, scope, exclusions, delegated_actions, gates, validation_evidence, plan };
 }
 
 async function sha256(value: string): Promise<string> {
@@ -57,8 +74,8 @@ async function priorReplay(
   request: Request,
   body: unknown,
 ): Promise<{ key: string; hash: string } | Response> {
-  const key = request.headers.get("Idempotency-Key");
-  if (!key) return error("invalid_request", "Idempotency-Key is required", 400);
+  const key = idempotencyKey(request);
+  if (!key) return error("invalid_request", IDEMPOTENCY_KEY_MESSAGE, 400);
   const hash = await sha256(JSON.stringify(body));
   const path = new URL(request.url).pathname;
   const existing = await env.DB.prepare(
@@ -166,7 +183,7 @@ export async function createProject(request: Request, env: Env, caller: Actor): 
   const body = await requestJson(request);
   if (isResponse(body)) return body;
   const input = projectInput(body);
-  if (!input) return error("invalid_request", "slug, title, and originator_id are required", 400);
+  if (!input) return error("invalid_request", `slug (canonical, at most ${V1_LIMITS.slug} bytes), title (at most ${V1_LIMITS.title} bytes), and originator_id are required and must be non-blank`, 400);
   if (!await activeActor(env, input.originator_id)) return error("invalid_request", "originator_id must be an active actor", 400);
   const idempotency = await priorReplay(env, caller, request, body);
   if (isResponse(idempotency)) return idempotency;
@@ -214,7 +231,7 @@ export async function authorizeProject(request: Request, env: Env, caller: Actor
   const body = await requestJson(request);
   if (isResponse(body)) return body;
   const input = authorizationInput(body);
-  if (!input) return error("invalid_request", "authorization envelope is incomplete", 400);
+  if (!input) return error("invalid_request", "authorization envelope is incomplete: every field must be non-blank and within its V1 limit", 400);
   if (!await activeActor(env, input.proposed_owner_id)) return error("invalid_request", "proposed_owner_id must be an active actor", 400);
   const version = expectedVersion(request);
   if (isResponse(version)) return version;
