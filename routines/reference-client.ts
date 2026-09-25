@@ -25,6 +25,17 @@
  */
 
 import { buildAuthHeaders, type ReferenceClientAuth } from "./access-auth";
+import {
+  ResponseDecodeError,
+  decodeActivityPage,
+  decodeAgentWorkSnapshot,
+  decodeDecisionsEnvelope,
+  decodeNeedsShane,
+  decodePullCandidate,
+  decodeWorkRequestSummary,
+  type Decoder,
+} from "./response-schema";
+export { ResponseDecodeError } from "./response-schema";
 import type { CompleteAction, CreateNeedsShane, DelegateAction, NeedsShane, RecordDecision } from "../contracts/needs-shane";
 export type { CompleteAction, CreateNeedsShane, DelegateAction, NeedsShane, RecordDecision } from "../contracts/needs-shane";
 import type { BlockRequestInput, EndRequestInput, RequestBlocker, RequestLifecycleFields, ReturnRequestInput, UnblockRequestInput } from "../contracts/request-lifecycle";
@@ -284,7 +295,7 @@ export class FleetRoutineClient {
 
     await this.throwIfError(response, "reconcile_failed", "GET /v1/me/work returned");
 
-    const snapshot = (await response.json()) as AgentWorkSnapshot;
+    const snapshot = await this.decodeBody(response, decodeAgentWorkSnapshot);
 
     // Persist cursor BEFORE returning. Native persistence must succeed
     // before the cursor advances (contracts/routine-v1.md).
@@ -315,11 +326,12 @@ export class FleetRoutineClient {
     version: number,
     idempotencyKey: string,
   ): Promise<WorkRequestSummary> {
-    return this.mutate<WorkRequestSummary>(
+    return this.mutate(
       `/v1/requests/${encodeURIComponent(requestId)}/accept`,
       version,
       {},
       idempotencyKey,
+      decodeWorkRequestSummary,
     );
   }
 
@@ -341,41 +353,42 @@ export class FleetRoutineClient {
     if (evidence !== undefined) {
       body.evidence = evidence;
     }
-    return this.mutate<WorkRequestSummary>(
+    return this.mutate(
       `/v1/requests/${encodeURIComponent(requestId)}/fulfill`,
       version,
       body,
       idempotencyKey,
+      decodeWorkRequestSummary,
     );
   }
 
   /** Decline a pending invitation without creating an obligation. */
   async declineRequest(requestId: string, version: number, idempotencyKey: string, input: EndRequestInput): Promise<WorkRequestSummary> {
-    return this.mutate(`/v1/requests/${encodeURIComponent(requestId)}/decline`, version, input, idempotencyKey);
+    return this.mutate(`/v1/requests/${encodeURIComponent(requestId)}/decline`, version, input, idempotencyKey, decodeWorkRequestSummary);
   }
 
   /** Withdraw a pending invitation sent by this agent. */
   async withdrawRequest(requestId: string, version: number, idempotencyKey: string, input: EndRequestInput): Promise<WorkRequestSummary> {
-    return this.mutate(`/v1/requests/${encodeURIComponent(requestId)}/withdraw`, version, input, idempotencyKey);
+    return this.mutate(`/v1/requests/${encodeURIComponent(requestId)}/withdraw`, version, input, idempotencyKey, decodeWorkRequestSummary);
   }
 
   /** End an accepted obligation and disclose the unfinished work. */
   async returnRequest(requestId: string, version: number, idempotencyKey: string, input: ReturnRequestInput): Promise<WorkRequestSummary> {
-    return this.mutate(`/v1/requests/${encodeURIComponent(requestId)}/return`, version, input, idempotencyKey);
+    return this.mutate(`/v1/requests/${encodeURIComponent(requestId)}/return`, version, input, idempotencyKey, decodeWorkRequestSummary);
   }
 
   /** Attach a blocker while retaining the accepted obligation. */
   async blockRequest(requestId: string, version: number, idempotencyKey: string, input: BlockRequestInput): Promise<WorkRequestSummary> {
-    return this.mutate(`/v1/requests/${encodeURIComponent(requestId)}/block`, version, input, idempotencyKey);
+    return this.mutate(`/v1/requests/${encodeURIComponent(requestId)}/block`, version, input, idempotencyKey, decodeWorkRequestSummary);
   }
 
   async unblockRequest(requestId: string, version: number, idempotencyKey: string, input: UnblockRequestInput): Promise<WorkRequestSummary> {
-    return this.mutate(`/v1/requests/${encodeURIComponent(requestId)}/unblock`, version, input, idempotencyKey);
+    return this.mutate(`/v1/requests/${encodeURIComponent(requestId)}/unblock`, version, input, idempotencyKey, decodeWorkRequestSummary);
   }
 
   /** Explicitly record a due invitation expiry; the server enforces its deadline. */
   async expireRequest(requestId: string, version: number, idempotencyKey: string): Promise<WorkRequestSummary> {
-    return this.mutate(`/v1/requests/${encodeURIComponent(requestId)}/expire`, version, {}, idempotencyKey);
+    return this.mutate(`/v1/requests/${encodeURIComponent(requestId)}/expire`, version, {}, idempotencyKey, decodeWorkRequestSummary);
   }
 
   /**
@@ -399,11 +412,12 @@ export class FleetRoutineClient {
   ): Promise<WorkRequestSummary> {
     const body: Record<string, unknown> = { recipient_id: recipientId, title, detail };
     if (expiresAt !== undefined) body.expires_at = expiresAt;
-    return this.mutate<WorkRequestSummary>(
+    return this.mutate(
       `/v1/projects/${encodeURIComponent(projectId)}/requests`,
       undefined,
       body,
       idempotencyKey,
+      decodeWorkRequestSummary,
     );
   }
 
@@ -423,11 +437,12 @@ export class FleetRoutineClient {
     const body: Record<string, unknown> = { recipient_id: recipientId, title, detail };
     if (artifact !== undefined) body.artifact = artifact;
     if (expiresAt !== undefined) body.expires_at = expiresAt;
-    return this.mutate<WorkRequestSummary>(
+    return this.mutate(
       "/v1/requests",
       undefined,
       body,
       idempotencyKey,
+      decodeWorkRequestSummary,
     );
   }
 
@@ -446,11 +461,12 @@ export class FleetRoutineClient {
     detail: string,
     idempotencyKey: string,
   ): Promise<PullCandidate> {
-    return this.mutate<PullCandidate>(
+    return this.mutate(
       "/v1/pull-candidates",
       undefined,
       { project_id: projectId, title, detail },
       idempotencyKey,
+      decodePullCandidate,
     );
   }
 
@@ -462,7 +478,7 @@ export class FleetRoutineClient {
       `${this.baseUrl}/v1/requests/${encodeURIComponent(requestId)}`,
       { method: "GET", headers: await this.authHeaders() },
     );
-    return this.parseJson<WorkRequestSummary>(response);
+    return this.parseJson(response, decodeWorkRequestSummary);
   }
 
   /**
@@ -487,10 +503,7 @@ export class FleetRoutineClient {
 
     await this.throwIfError(response, "request_failed", "GET /v1/activity returned");
 
-    const result = (await response.json()) as {
-      activity: ActivityEvent[];
-      next_cursor: string;
-    };
+    const result = await this.decodeBody(response, decodeActivityPage);
 
     // Persist cursor only on the Routine (no-arg) path. Native persistence
     // must succeed before the cursor advances (contracts/routine-v1.md).
@@ -510,7 +523,7 @@ export class FleetRoutineClient {
       `${this.baseUrl}/v1/decisions${state === "all" ? "?state=all" : ""}`,
       { method: "GET", headers: await this.authHeaders() },
     );
-    const envelope = await this.parseJson<{ decisions: DecisionRequest[] }>(response);
+    const envelope = await this.parseJson(response, decodeDecisionsEnvelope);
     return envelope.decisions;
   }
 
@@ -518,23 +531,23 @@ export class FleetRoutineClient {
     const response = await this.fetchFn(`${this.baseUrl}/v1/decisions/${encodeURIComponent(id)}`, {
       method: "GET", headers: await this.authHeaders(),
     });
-    return this.parseJson<NeedsShane>(response);
+    return this.parseJson(response, decodeNeedsShane);
   }
 
   async createNeedsShane(input: CreateNeedsShane, idempotencyKey: string): Promise<NeedsShane> {
-    return this.mutate("/v1/decisions", undefined, input, idempotencyKey);
+    return this.mutate("/v1/decisions", undefined, input, idempotencyKey, decodeNeedsShane);
   }
 
   async recordDecision(id: string, version: number, input: RecordDecision, idempotencyKey: string): Promise<NeedsShane> {
-    return this.mutate(`/v1/decisions/${encodeURIComponent(id)}/decide`, version, input, idempotencyKey);
+    return this.mutate(`/v1/decisions/${encodeURIComponent(id)}/decide`, version, input, idempotencyKey, decodeNeedsShane);
   }
 
   async completeAction(id: string, version: number, input: CompleteAction, idempotencyKey: string): Promise<NeedsShane> {
-    return this.mutate(`/v1/decisions/${encodeURIComponent(id)}/complete-action`, version, input, idempotencyKey);
+    return this.mutate(`/v1/decisions/${encodeURIComponent(id)}/complete-action`, version, input, idempotencyKey, decodeNeedsShane);
   }
 
   async delegateAction(id: string, version: number, input: DelegateAction, idempotencyKey: string): Promise<NeedsShane> {
-    return this.mutate(`/v1/decisions/${encodeURIComponent(id)}/delegate-action`, version, input, idempotencyKey);
+    return this.mutate(`/v1/decisions/${encodeURIComponent(id)}/delegate-action`, version, input, idempotencyKey, decodeNeedsShane);
   }
 
   // --- Internal ---
@@ -574,6 +587,7 @@ export class FleetRoutineClient {
     version: number | undefined,
     body: Record<string, unknown>,
     idempotencyKey: string,
+    decode: Decoder<T>,
   ): Promise<T> {
     const headers: Record<string, string> = {
       ...(await this.authHeaders()),
@@ -590,15 +604,61 @@ export class FleetRoutineClient {
       body: JSON.stringify(body),
     });
 
-    return this.parseJson<T>(response);
+    return this.parseJson(response, decode);
   }
 
-  private async parseJson<T>(response: {
-    status: number;
-    json: () => Promise<unknown>;
-    text: () => Promise<string>;
-  }): Promise<T> {
+  private async parseJson<T>(
+    response: {
+      status: number;
+      json: () => Promise<unknown>;
+      text: () => Promise<string>;
+    },
+    decode: Decoder<T>,
+  ): Promise<T> {
     await this.throwIfError(response, "request_failed", "Request returned");
-    return (await response.json()) as T;
+    return this.decodeBody(response, decode);
+  }
+
+  /**
+   * The one place a successful response becomes a typed value (#7).
+   *
+   * Before this existed, each route cast its body — so a 2xx of the wrong
+   * shape became a typed value, and on the two cursor paths it became durable
+   * native state before anyone looked at it. Every route now passes through
+   * here, which is why the guarantee is a property of the client rather than
+   * a habit of each method.
+   *
+   * Both failure modes answer with the same stable code, `invalid_response`:
+   * a body that is not JSON, and a body that is JSON of the wrong shape. The
+   * caller needs to distinguish "the server refused" from "the server agreed
+   * and I could not read the answer" — not to distinguish the two ways of
+   * being unreadable.
+   *
+   * No response data enters the message. A parse failure is reported by the
+   * error's `name`, following `access-auth.ts`: a JSON parse error quotes the
+   * offending bytes back, and those bytes can be another actor's data.
+   */
+  private async decodeBody<T>(
+    response: { status: number; json: () => Promise<unknown> },
+    decode: Decoder<T>,
+  ): Promise<T> {
+    let body: unknown;
+    try {
+      body = await response.json();
+    } catch (err) {
+      throw new FleetRoutineError(
+        "invalid_response",
+        `Response body is not JSON: ${err instanceof Error ? err.name : "unknown error"}`,
+        response.status,
+      );
+    }
+    try {
+      return decode(body);
+    } catch (err) {
+      if (err instanceof ResponseDecodeError) {
+        throw new FleetRoutineError("invalid_response", err.message, response.status);
+      }
+      throw err;
+    }
   }
 }

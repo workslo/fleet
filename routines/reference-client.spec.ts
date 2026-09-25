@@ -507,6 +507,27 @@ describe("FleetRoutineClient — createWorkRequest", () => {
 });
 
 describe("FleetRoutineClient — standalone review requests", () => {
+  /**
+   * These transport tests assert headers, not response shape, and their
+   * fixture used to be `{ id, project_id }` — two fields out of fourteen.
+   * It passed because the client cast its body instead of decoding it (#7).
+   * A contract-valid record keeps the tests about what they are about.
+   */
+  const standaloneRequestBody = () => ({
+    id: "standalone/1",
+    project_id: null,
+    requester: { id: "claude" },
+    recipient: { id: "codex" },
+    title: "Review artifact",
+    detail: "Review the shared link",
+    state: "Pending",
+    version: 1,
+    accepted_at: null,
+    fulfilled_at: null,
+    created_at: "2026-09-25T00:00:00Z",
+    updated_at: "2026-09-25T00:00:00Z",
+  });
+
   const standalonePaths = [
     {
       name: "create",
@@ -555,7 +576,7 @@ describe("FleetRoutineClient — standalone review requests", () => {
         };
       });
       const fetchFn = makeFetch(() => ({
-        status: 200, body: { id: "standalone/1", project_id: null },
+        status: 200, body: standaloneRequestBody(),
       }));
       const client = makeClient(fetchFn, store, { mode: "access-pair", getCredentials });
       expect(getCredentials).not.toHaveBeenCalled();
@@ -586,7 +607,7 @@ describe("FleetRoutineClient — standalone review requests", () => {
     it("keeps only operation headers in external mode", async () => {
       const fetchFn = makeFetch((_url, init) => {
         expect(init?.headers).toEqual(headers);
-        return { status: 200, body: { id: "standalone/1", project_id: null } };
+        return { status: 200, body: standaloneRequestBody() };
       });
       const client = makeClient(fetchFn, makeCursorStore(), { mode: "external" });
 
@@ -865,9 +886,19 @@ describe("FleetRoutineClient — read endpoints", () => {
           {
             id: "dec-1",
             project_id: "proj-1",
+            work_request_id: null,
+            requester: { id: "claude" },
+            kind: "decision",
             question: "Should we activate V1?",
+            resolution_condition: null,
             state: "Open",
+            version: 1,
+            decision: null,
+            action: null,
+            delegation: null,
+            action_status: "not_requested",
             created_at: "2026-08-31T00:00:00Z",
+            updated_at: "2026-08-31T00:00:00Z",
           },
         ],
       },
