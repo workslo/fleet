@@ -131,7 +131,12 @@ describe("Request lifecycle routine access", () => {
       .mockResolvedValueOnce(response({ error: "version_conflict", message: "Refresh the request" }, 409));
     const { client, write } = setup(fetchFn);
 
-    await expect(client.expireRequest("r1", 2, "expire-key")).rejects.toThrow("invalid JSON");
+    // Changed by #7, and it is another hand's test: a 200 whose body will not
+    // parse used to surface the parser's own SyntaxError message verbatim, and
+    // a JSON parse error quotes the offending bytes — which can be another
+    // actor's data. It is now a stable code. The guarantee this test exists
+    // for, that the cursor is untouched, is asserted unchanged below.
+    await expect(client.expireRequest("r1", 2, "expire-key")).rejects.toMatchObject({ code: "invalid_response", status: 200 });
     await expect(client.expireRequest("r1", 2, "expire-key")).rejects.toMatchObject({ code: "request_failed", status: 502 });
     await expect(client.expireRequest("r1", 2, "expire-key")).rejects.toMatchObject({ code: "version_conflict", status: 409 });
     expect(write).not.toHaveBeenCalled();
