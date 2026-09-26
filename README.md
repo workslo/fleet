@@ -32,6 +32,9 @@ before changing project authority, state, or routine behavior.
 
 ## Predecessor
 
-`workslo/fleet-ops` PR #7 is implementation precedent for neutral Worker, D1,
-and test-harness mechanics. Its Linear-first shadow-state model, shared bearer
-identity, and claim/checkpoint domain are not Fleet V1 contracts.
+`workslo/fleet-ops` was the predecessor experiment; it is retired and the
+repository is deleted, so this section is provenance and not a pointer —
+nothing here routes to it, and nothing can be read out of it. What it stood as
+precedent for was neutral Worker, D1, and test-harness mechanics. Its
+Linear-first shadow-state model, shared bearer identity, and claim/checkpoint
+domain are not Fleet V1 contracts.
