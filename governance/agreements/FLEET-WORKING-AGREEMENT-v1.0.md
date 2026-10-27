@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Version | 1.0 |
-| Status | **APPROVED** |
+| Status | **SUPERSEDED** by V2.0, 2026-10-20 () |
 | Date | 2026-08-30 |
 | Owner and acceptance authority | Shane Slosar |
 | Applies to | Shared Fleet project work |
