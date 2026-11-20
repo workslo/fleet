@@ -125,6 +125,145 @@ describe("Fleet project lifecycle", () => {
     });
   });
 
+  it.each(["Accepted", "Failed", "Abandoned"])("records project closeout as %s", async (disposition) => {
+    const project = await proposeProject();
+    const path = `/v1/projects/${project.id}`;
+    expect((await mutateAs("shane", `${path}/authorize`, 1, authorizationBody())).status).toBe(200);
+    expect((await mutateAs("codex", `${path}/owner-accept`, 2, {})).status).toBe(200);
+    const evidence = [{ uri: "https://example.test/report", summary: "Verified result" }];
+    const submission = { summary: "Delivered the local slice", evidence };
+    const closure = { disposition, summary: "Reviewed the submitted outcome" };
+
+    expect((await mutateAs("shane", `${path}/close`, 3, closure)).status).toBe(409);
+    expect((await mutateAs("claude", `${path}/submit-outcome`, 3, submission)).status).toBe(403);
+    expect((await mutateAs("codex", `${path}/submit-outcome`, 3, { ...submission, actor_id: "shane" })).status).toBe(400);
+    expect((await mutateAs("codex", `${path}/submit-outcome`, 2, submission)).status).toBe(412);
+
+    const submitted = await mutateAs("codex", `${path}/submit-outcome`, 3, submission);
+    expect(submitted.status).toBe(200);
+    expect(await submitted.json()).toMatchObject({
+      state: "Awaiting Acceptance",
+      version: 4,
+      outcome_submission: { ...submission, actor: { id: "codex" }, at: expect.any(String) },
+    });
+    expect((await mutateAs("codex", `${path}/close`, 4, closure)).status).toBe(403);
+
+    const key = crypto.randomUUID();
+    const outcomes = await Promise.all([
+      mutateAs("shane", `${path}/close`, 4, closure, key),
+      mutateAs("shane", `${path}/close`, 4, closure, key),
+    ]);
+    const [first, second] = outcomes;
+    expect(first?.status).toBe(200);
+    expect(second?.status).toBe(200);
+    expect(await first?.text()).toBe(await second?.text());
+    expect((await mutateAs("shane", `${path}/close`, 4, closure)).status).toBe(412);
+    expect((await mutateAs("shane", `${path}/close`, 4, { ...closure, summary: "Changed" }, key)).status).toBe(409);
+
+    const card = await (await getAs("claude", path)).json() as {
+      activity: Array<{ type: string; actor: { id: string } }>;
+    };
+    expect(card).toMatchObject({
+      state: "Closed",
+      owner: { id: "codex" },
+      next_action: null,
+      version: 5,
+      outcome_submission: { ...submission, actor: { id: "codex" } },
+      closure: { ...closure, actor: { id: "shane" }, at: expect.any(String), evidence: [] },
+    });
+    expect(card.activity.filter(({ type }) => type === "project.closed")).toEqual([
+      expect.objectContaining({ actor: { id: "shane" } }),
+    ]);
+    expect(card.activity.filter(({ type }) => type === "project.outcome_submitted")).toEqual([
+      expect.objectContaining({ actor: { id: "codex" } }),
+    ]);
+    const work = await (await getAs("codex", "/v1/me/work")).json() as { obligations: Array<{ project_id: string }> };
+    expect(work.obligations.some(({ project_id }) => project_id === project.id)).toBe(false);
+  });
+
+  it.each(["Failed", "Abandoned"])("allows the owner to record %s within the authorized envelope", async (disposition) => {
+    const project = await proposeProject();
+    const path = `/v1/projects/${project.id}`;
+    expect((await mutateAs("shane", `${path}/authorize`, 1, authorizationBody())).status).toBe(200);
+    expect((await mutateAs("codex", `${path}/owner-accept`, 2, {})).status).toBe(200);
+    const closure = { disposition, summary: "Work ended within the envelope", within_envelope: true };
+    expect((await mutateAs("claude", `${path}/close`, 3, closure)).status).toBe(403);
+    expect((await mutateAs("codex", `${path}/close`, 3, { ...closure, within_envelope: false })).status).toBe(400);
+    expect((await mutateAs("codex", `${path}/close`, 3, { ...closure, disposition: "Accepted" })).status).toBe(400);
+    const closed = await mutateAs("codex", `${path}/close`, 3, closure);
+    expect(closed.status).toBe(200);
+    expect(await closed.json()).toMatchObject({ state: "Closed", version: 4, closure: { ...closure, actor: { id: "codex" } } });
+  });
+
+  it("routes a paused project's outcome through Shane's review", async () => {
+    const project = await proposeProject();
+    const path = `/v1/projects/${project.id}`;
+    expect((await mutateAs("shane", `${path}/authorize`, 1, authorizationBody())).status).toBe(200);
+    expect((await mutateAs("codex", `${path}/owner-accept`, 2, {})).status).toBe(200);
+    await env.DB.prepare("UPDATE projects SET state = 'Paused' WHERE id = ?").bind(project.id).run();
+
+    const submitted = await mutateAs("codex", `${path}/submit-outcome`, 3, { summary: "Review the project commitments" });
+    expect(submitted.status).toBe(200);
+    expect(await submitted.json()).toMatchObject({ state: "Awaiting Acceptance" });
+    expect((await mutateAs("shane", `${path}/close`, 4, { disposition: "Abandoned", summary: "Resolved the commitments" })).status).toBe(200);
+  });
+
+  it("serializes project-linked creation with closeout and preserves replies to accepted retries", async () => {
+    const project = await proposeProject();
+    const path = `/v1/projects/${project.id}`;
+    expect((await mutateAs("shane", `${path}/authorize`, 1, authorizationBody())).status).toBe(200);
+    expect((await mutateAs("codex", `${path}/owner-accept`, 2, {})).status).toBe(200);
+    const request = { recipient_id: "claude", title: "Review", detail: "Review the draft" };
+    const candidate = { project_id: project.id, title: "Explore", detail: "Read the report" };
+    const requestKey = crypto.randomUUID();
+    const candidateKey = crypto.randomUUID();
+
+    const [closed, createdRequest, createdCandidate] = await Promise.all([
+      mutateAs("codex", `${path}/close`, 3, { disposition: "Failed", summary: "Attempt ended", within_envelope: true }),
+      postAs("codex", `${path}/requests`, request, requestKey),
+      postAs("codex", "/v1/pull-candidates", candidate, candidateKey),
+    ]);
+    expect(closed.status).toBe(200);
+    expect([201, 409]).toContain(createdRequest.status);
+    expect([201, 409]).toContain(createdCandidate.status);
+
+    expect((await postAs("codex", `${path}/requests`, request)).status).toBe(409);
+    expect((await postAs("codex", "/v1/pull-candidates", candidate)).status).toBe(409);
+    const requestReplay = await postAs("codex", `${path}/requests`, request, requestKey);
+    const candidateReplay = await postAs("codex", "/v1/pull-candidates", candidate, candidateKey);
+    expect(requestReplay.status).toBe(createdRequest.status);
+    expect(candidateReplay.status).toBe(createdCandidate.status);
+    if (createdRequest.ok) expect(await requestReplay.text()).toBe(await createdRequest.text());
+    if (createdCandidate.ok) expect(await candidateReplay.text()).toBe(await createdCandidate.text());
+
+    const feed = await (await getAs("codex", "/v1/activity")).json() as {
+      activity: Array<{ id: number; project_id: string; type: string }>;
+    };
+    const projectEvents = feed.activity.filter(({ project_id }) => project_id === project.id);
+    expect(projectEvents.at(-1)?.type).toBe("project.closed");
+    expect(projectEvents.filter(({ type }) => type === "work_request.created")).toHaveLength(createdRequest.ok ? 1 : 0);
+    expect(projectEvents.filter(({ type }) => type === "pull_candidate.published")).toHaveLength(createdCandidate.ok ? 1 : 0);
+  });
+
+  it("rolls back a closeout submission when its replay record cannot be stored", async () => {
+    const project = await proposeProject();
+    const path = `/v1/projects/${project.id}`;
+    expect((await mutateAs("shane", `${path}/authorize`, 1, authorizationBody())).status).toBe(200);
+    expect((await mutateAs("codex", `${path}/owner-accept`, 2, {})).status).toBe(200);
+    const key = crypto.randomUUID();
+    const removeTrigger = await failIdempotencyWrite(key);
+    try {
+      expect((await mutateAs("codex", `${path}/submit-outcome`, 3, { summary: "Ready" }, key)).status).toBe(500);
+    } finally {
+      await removeTrigger();
+    }
+    const card = await (await getAs("codex", path)).json();
+    expect(card).toMatchObject({ state: "Active", version: 3 });
+    expect(card).not.toHaveProperty("outcome_submission");
+    expect(card).toMatchObject({ activity: expect.not.arrayContaining([expect.objectContaining({ type: "project.outcome_submitted" })]) });
+    expect((await mutateAs("codex", `${path}/submit-outcome`, 3, { summary: "Ready" }, key)).status).toBe(200);
+  });
+
   it("lists a proposed project in the portfolio", async () => {
     const project = await proposeProject();
     const response = await getAs("claude", "/v1/portfolio");

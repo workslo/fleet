@@ -2,6 +2,7 @@ import type { RequestLifecycleFields, RequestTransition, EndRequestInput, Return
 export type { RequestTransition, EndRequestInput, ReturnRequestInput, BlockRequestInput, UnblockRequestInput } from "../../contracts/request-lifecycle";
 import type { NeedsShane, CreateNeedsShane, RecordDecision, CompleteAction, DelegateAction } from "../../contracts/needs-shane";
 export type { NeedsShane, CreateNeedsShane, RecordDecision, CompleteAction, DelegateAction } from "../../contracts/needs-shane";
+import type { ProjectClosure, ProjectClosureInput, ProjectOutcome, ProjectOutcomeInput } from "../../contracts/project-closeout";
 export type ActorRef = { id: string };
 
 export type FleetIdentity = {
@@ -31,6 +32,8 @@ export type ProjectEnvelope = {
 };
 
 export type ProjectCard = {
+  outcome_submission?: ProjectOutcome;
+  closure?: ProjectClosure;
   needs_shane?: NeedsShane[];
   id: string;
   slug: string;
@@ -114,6 +117,14 @@ export class FleetApi {
 
   async project(projectId: string): Promise<ProjectCard> {
     return this.get(`/v1/projects/${encodeURIComponent(projectId)}`);
+  }
+
+  async submitProjectOutcome(id: string, version: number, input: ProjectOutcomeInput, key: string): Promise<ProjectCard> {
+    return this.post(`/v1/projects/${encodeURIComponent(id)}/submit-outcome`, input, version, key);
+  }
+
+  async closeProject(id: string, version: number, input: ProjectClosureInput, key: string): Promise<ProjectCard> {
+    return this.post(`/v1/projects/${encodeURIComponent(id)}/close`, input, version, key);
   }
 
   async request(requestId: string): Promise<WorkRequest> {

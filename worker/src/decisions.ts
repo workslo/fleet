@@ -39,7 +39,7 @@ function onlyKeys(value: Record<string, unknown>, keys: string[]) {
 }
 
 // #9. Decodes rather than type-guards, so the trimmed, bounded links are what get stored.
-function evidenceLinks(value: unknown): NeedsShaneEvidence[] | null {
+export function evidenceLinks(value: unknown): NeedsShaneEvidence[] | null {
   if (!Array.isArray(value) || value.length > V1_LIMITS.evidence_items) return null;
   const links: NeedsShaneEvidence[] = [];
   for (const entry of value) {

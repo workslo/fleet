@@ -1,5 +1,6 @@
+import { PROJECT_DISPOSITIONS, type ProjectClosure, type ProjectOutcome } from "../../contracts/project-closeout";
 import { error, isResponse, json, requestJson } from "./http";
-import { decisionsForSource } from "./decisions";
+import { decisionsForSource, evidenceLinks } from "./decisions";
 import {
   IDEMPOTENCY_KEY_MESSAGE,
   V1_LIMITS,
@@ -159,6 +160,8 @@ async function card(env: Env, row: ProjectRow, includeNeedsShane = true) {
     health: row.health,
     next_action: row.next_action,
     version: row.version,
+    ...(row.outcome_submission_json ? { outcome_submission: JSON.parse(row.outcome_submission_json) as ProjectOutcome } : {}),
+    ...(row.closure_json ? { closure: JSON.parse(row.closure_json) as ProjectClosure } : {}),
     ...(includeNeedsShane ? { needs_shane: await decisionsForSource(env, { projectId: row.id }) } : {}),
     envelope: currentEnvelope && {
       revision: currentEnvelope.revision,
@@ -383,6 +386,102 @@ export async function acceptOwnership(request: Request, env: Env, caller: Actor,
   }
   if (replay?.meta.changes !== 1) return error("internal_error", "project owner acceptance response was not stored", 500);
   return storedResponse(responseBody);
+}
+
+export async function transitionProjectCloseout(
+  request: Request,
+  env: Env,
+  caller: Actor,
+  projectId: string,
+  action: "submit-outcome" | "close",
+): Promise<Response> {
+  const closing = action === "close";
+  const body = await requestJson(request);
+  if (isResponse(body)) return body;
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return error("invalid_request", "a project closeout record is required", 400);
+  }
+  const input = body as Record<string, unknown>;
+  const keys = closing ? ["summary", "evidence", "disposition", "within_envelope"] : ["summary", "evidence"];
+  const summary = boundedText(input.summary, V1_LIMITS.detail);
+  const evidence = input.evidence === undefined ? [] : evidenceLinks(input.evidence);
+  const disposition = PROJECT_DISPOSITIONS.find((option) => option === input.disposition);
+  const withinEnvelope = input.within_envelope === true;
+  if (summary === null || evidence === null || (closing && disposition === undefined) ||
+      (input.within_envelope !== undefined && (!withinEnvelope || disposition === "Accepted")) ||
+      Object.keys(input).some((key) => !keys.includes(key))) {
+    return error("invalid_request", "provide a non-blank summary, valid evidence links, and a valid disposition and confirmation when closing", 400);
+  }
+  const shaneReview = closing && !withinEnvelope;
+  if (shaneReview && caller.id !== "shane") {
+    return error("forbidden", "Shane records final acceptance or reviews a closure that exceeds the owner's authority", 403);
+  }
+
+  const version = expectedVersion(request);
+  if (isResponse(version)) return version;
+  const idempotency = await priorReplay(env, caller, request, body);
+  if (isResponse(idempotency)) return idempotency;
+
+  const project = await projectRow(env, projectId);
+  if (!project) return error("not_found", "project does not exist", 404);
+  if (!shaneReview && project.owner_id !== caller.id) {
+    return error("forbidden", "only the project owner may submit its outcome or close it within the envelope", 403);
+  }
+  if (project.version !== version) {
+    const replay = await priorReplay(env, caller, request, body);
+    return isResponse(replay) ? replay : error("precondition_failed", "project version is stale", 412);
+  }
+  const allowedStates = withinEnvelope ? ["Active", "Awaiting Acceptance", "Paused"]
+    : shaneReview ? ["Awaiting Acceptance"] : ["Active", "Paused"];
+  if (!allowedStates.includes(project.state)) {
+    return error("conflict", "project is not ready for this transition", 409);
+  }
+
+  const currentCard = await card(env, project);
+  const now = new Date().toISOString();
+  const outcome: ProjectOutcome = { summary, evidence, actor: { id: caller.id }, at: now };
+  const closure: ProjectClosure | undefined = disposition === undefined
+    ? undefined : { ...outcome, disposition, ...(withinEnvelope ? { within_envelope: true } : {}) };
+  const state = closing ? "Closed" : "Awaiting Acceptance";
+  const nextAction = closing ? null : "Shane reviews the submitted outcome.";
+  const eventType = closing ? "project.closed" : "project.outcome_submitted";
+  const responseBody = JSON.stringify({
+    ...currentCard,
+    ...(closure ? { closure } : { outcome_submission: outcome }),
+    state,
+    next_action: nextAction,
+    version: version + 1,
+    updated_at: now,
+    activity: [{ actor: outcome.actor, type: eventType, created_at: now }, ...currentCard.activity].slice(0, 20),
+  });
+  const payload = JSON.stringify(closure ?? outcome);
+  // All dependent writes see the same pre-transition row before the version advances.
+  const predicate = "id = ? AND version = ? AND state = ?";
+  const guard = [projectId, version, project.state];
+  try {
+    const results = await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO activity_events
+          (project_id, actor_id, principal_provider, principal_issuer, principal_kind, principal_subject, type, payload_json, created_at)
+         SELECT id, ?, ?, ?, ?, ?, ?, ?, ? FROM projects WHERE ${predicate}`,
+      ).bind(caller.id, ...principalValues(caller), eventType, payload, now, ...guard),
+      env.DB.prepare(
+        `INSERT INTO idempotency_records (actor_id, idempotency_key, method, path, request_hash, response_status, response_body)
+         SELECT ?, ?, ?, ?, ?, 200, ? FROM projects WHERE ${predicate}`,
+      ).bind(caller.id, idempotency.key, request.method, new URL(request.url).pathname, idempotency.hash, responseBody, ...guard),
+      env.DB.prepare(
+        `UPDATE projects SET state = ?, next_action = ?, outcome_submission_json = ?, closure_json = ?,
+          version = version + 1, updated_at = ? WHERE ${predicate}`,
+      ).bind(state, nextAction, closing ? project.outcome_submission_json : payload,
+        closing ? payload : null, now, ...guard),
+    ]);
+    if (results[2]?.meta.changes === 1) return storedResponse(responseBody);
+  } catch {
+    const replay = await priorReplay(env, caller, request, body);
+    return isResponse(replay) ? replay : error("internal_error", "project transition was not stored", 500);
+  }
+  const replay = await priorReplay(env, caller, request, body);
+  return isResponse(replay) ? replay : error("precondition_failed", "project changed before the transition was recorded", 412);
 }
 
 export async function getProject(env: Env, projectId: string): Promise<Response> {

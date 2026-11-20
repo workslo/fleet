@@ -1,7 +1,7 @@
 import { enforceSameOriginMutation, resolveCaller } from "./auth";
 import { error, isResponse, json } from "./http";
 import { createDecision, getDecision, listDecisions, transitionDecision } from "./decisions";
-import { acceptOwnership, authorizeProject, createProject, getProject, portfolio } from "./projects";
+import { acceptOwnership, authorizeProject, createProject, getProject, portfolio, transitionProjectCloseout } from "./projects";
 import { transitionRequest, activity, createPullCandidate, createRequest, getRequest, myWork } from "./work";
 import type { Env } from "./types";
 
@@ -63,7 +63,7 @@ export default {
       return error("not_found", "route does not exist", 404);
     }
 
-    const match = url.pathname.match(/^\/v1\/projects\/([^/]+)(?:\/(authorize|owner-accept|requests))?$/);
+    const match = url.pathname.match(/^\/v1\/projects\/([^/]+)(?:\/(authorize|owner-accept|submit-outcome|close|requests))?$/);
     if (!match) return error("not_found", "route does not exist", 404);
     const idSegment = match[1];
     if (!idSegment) return error("not_found", "route does not exist", 404);
@@ -73,6 +73,9 @@ export default {
     if (request.method === "GET" && !action) return getProject(env, projectId);
     if (request.method === "POST" && action === "authorize") return authorizeProject(request, env, caller, projectId);
     if (request.method === "POST" && action === "owner-accept") return acceptOwnership(request, env, caller, projectId);
+    if (request.method === "POST" && (action === "submit-outcome" || action === "close")) {
+      return transitionProjectCloseout(request, env, caller, projectId, action);
+    }
     if (request.method === "POST" && action === "requests") return createRequest(request, env, caller, projectId);
     return error("not_found", "route does not exist", 404);
   },

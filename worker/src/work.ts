@@ -139,10 +139,15 @@ async function priorReplay(env: Env, caller: Actor, request: Request, body: unkn
   return new Response(existing.response_body, { status: existing.response_status, headers: { "Content-Type": "application/json; charset=utf-8" } });
 }
 
-function idempotencyStatement(env: Env, caller: Actor, request: Request, idempotency: { key: string; hash: string }, status: number, body: string) {
+// Bind the same project ID twice. Standalone requests use null; every other
+// creation checks the project state inside the write batch.
+const projectAllowsCreation = "(? IS NULL OR EXISTS (SELECT 1 FROM projects WHERE id = ? AND state = 'Active'))";
+
+function idempotencyStatement(env: Env, caller: Actor, request: Request, idempotency: { key: string; hash: string }, body: string, projectId: string | null) {
   return env.DB.prepare(
-    "INSERT INTO idempotency_records (actor_id, idempotency_key, method, path, request_hash, response_status, response_body) VALUES (?, ?, ?, ?, ?, ?, ?)",
-  ).bind(caller.id, idempotency.key, request.method, new URL(request.url).pathname, idempotency.hash, status, body);
+    `INSERT INTO idempotency_records (actor_id, idempotency_key, method, path, request_hash, response_status, response_body)
+     SELECT ?, ?, ?, ?, ?, 201, ? WHERE ${projectAllowsCreation}`,
+  ).bind(caller.id, idempotency.key, request.method, new URL(request.url).pathname, idempotency.hash, body, projectId, projectId);
 }
 
 function storedResponse(body: string, status = 200): Response {
@@ -157,11 +162,6 @@ function expectedVersion(request: Request): number | Response {
 
 async function activeActor(env: Env, actorId: string): Promise<boolean> {
   const row = await env.DB.prepare("SELECT id FROM actors WHERE id = ? AND active = 1").bind(actorId).first<{ id: string }>();
-  return Boolean(row);
-}
-
-async function activeProject(env: Env, projectId: string): Promise<boolean> {
-  const row = await env.DB.prepare("SELECT id FROM projects WHERE id = ? AND state = 'Active'").bind(projectId).first<{ id: string }>();
   return Boolean(row);
 }
 
@@ -232,7 +232,6 @@ export async function createRequest(request: Request, env: Env, caller: Actor, r
   // refuse a new self-addressed ask before writing an idempotency, request or activity row.
   if (input.recipient_id === caller.id) return error("invalid_request", "recipient_id must name a different actor; self-claimed work is not a Work Request", 400);
   const projectId = routeProjectId ?? input.project_id ?? null;
-  if (projectId !== null && !await activeProject(env, projectId)) return error("conflict", "project-linked work requests require an active project", 409);
   if (!await activeActor(env, input.recipient_id)) return error("invalid_request", "recipient_id must be an active actor", 400);
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
@@ -245,20 +244,24 @@ export async function createRequest(request: Request, env: Env, caller: Actor, r
   };
   const responseBody = JSON.stringify(requestResponse(stored));
   try {
-    await env.DB.batch([
-      env.DB.prepare("INSERT INTO work_requests (id, project_id, requester_id, recipient_id, title, detail, artifact_uri, artifact_summary, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(id, projectId, caller.id, input.recipient_id, input.title, input.detail, input.artifact?.uri ?? null, input.artifact?.summary ?? null, expiresAt, now, now),
+    const [created] = await env.DB.batch([
+      env.DB.prepare(`INSERT INTO work_requests (id, project_id, requester_id, recipient_id, title, detail, artifact_uri, artifact_summary, expires_at, created_at, updated_at)
+        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${projectAllowsCreation}`)
+        .bind(id, projectId, caller.id, input.recipient_id, input.title, input.detail, input.artifact?.uri ?? null, input.artifact?.summary ?? null, expiresAt, now, now, projectId, projectId),
       env.DB.prepare(
         `INSERT INTO activity_events
           (project_id, request_id, actor_id, principal_provider, principal_issuer, principal_kind, principal_subject, type, payload_json, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'work_request.created', ?, ?)`,
-      ).bind(projectId, id, caller.id, ...principalValues(caller), JSON.stringify({ request_id: id, recipient_id: input.recipient_id, ...(expiresAt ? { expires_at: expiresAt } : {}) }), now),
-      idempotencyStatement(env, caller, request, idempotency, 201, responseBody),
+         SELECT ?, ?, ?, ?, ?, ?, ?, 'work_request.created', ?, ? WHERE ${projectAllowsCreation}`,
+      ).bind(projectId, id, caller.id, ...principalValues(caller), JSON.stringify({ request_id: id, recipient_id: input.recipient_id, ...(expiresAt ? { expires_at: expiresAt } : {}) }), now, projectId, projectId),
+      idempotencyStatement(env, caller, request, idempotency, responseBody, projectId),
     ]);
+    if (created?.meta.changes === 1) return storedResponse(responseBody, 201);
   } catch {
     const replay = await priorReplay(env, caller, request, body);
     return isResponse(replay) ? replay : error("internal_error", "work request was not stored", 500);
   }
-  return storedResponse(responseBody, 201);
+  const replay = await priorReplay(env, caller, request, body);
+  return isResponse(replay) ? replay : error("conflict", "project-linked work requests require an active project", 409);
 }
 
 type Transition = RequestTransition | "accept" | "fulfill";
@@ -392,27 +395,30 @@ export async function createPullCandidate(request: Request, env: Env, caller: Ac
   if (isResponse(body)) return body;
   const input = pullCandidateInput(body);
   if (!input) return error("invalid_request", "project_id, title, and detail are required", 400);
-  if (!await activeProject(env, input.project_id)) return error("conflict", "pull candidates require an active project", 409);
   const idempotency = await priorReplay(env, caller, request, body);
   if (isResponse(idempotency)) return idempotency;
   const id = crypto.randomUUID();
   const created_at = new Date().toISOString();
   const responseBody = JSON.stringify({ id, project_id: input.project_id, actor: { id: caller.id }, title: input.title, detail: input.detail, created_at });
   try {
-    await env.DB.batch([
-      env.DB.prepare("INSERT INTO pull_candidates (id, project_id, actor_id, title, detail, created_at) VALUES (?, ?, ?, ?, ?, ?)").bind(id, input.project_id, caller.id, input.title, input.detail, created_at),
+    const [created] = await env.DB.batch([
+      env.DB.prepare(`INSERT INTO pull_candidates (id, project_id, actor_id, title, detail, created_at)
+        SELECT ?, ?, ?, ?, ?, ? WHERE ${projectAllowsCreation}`)
+        .bind(id, input.project_id, caller.id, input.title, input.detail, created_at, input.project_id, input.project_id),
       env.DB.prepare(
         `INSERT INTO activity_events
           (project_id, actor_id, principal_provider, principal_issuer, principal_kind, principal_subject, type, payload_json, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, 'pull_candidate.published', ?, ?)`,
-      ).bind(input.project_id, caller.id, ...principalValues(caller), JSON.stringify({ pull_candidate_id: id }), created_at),
-      idempotencyStatement(env, caller, request, idempotency, 201, responseBody),
+         SELECT ?, ?, ?, ?, ?, ?, 'pull_candidate.published', ?, ? WHERE ${projectAllowsCreation}`,
+      ).bind(input.project_id, caller.id, ...principalValues(caller), JSON.stringify({ pull_candidate_id: id }), created_at, input.project_id, input.project_id),
+      idempotencyStatement(env, caller, request, idempotency, responseBody, input.project_id),
     ]);
+    if (created?.meta.changes === 1) return storedResponse(responseBody, 201);
   } catch {
     const replay = await priorReplay(env, caller, request, body);
     return isResponse(replay) ? replay : error("internal_error", "pull candidate was not stored", 500);
   }
-  return storedResponse(responseBody, 201);
+  const replay = await priorReplay(env, caller, request, body);
+  return isResponse(replay) ? replay : error("conflict", "pull candidates require an active project", 409);
 }
 
 function cursor(value: string | null): { id: number; value: string } | Response {
