@@ -35,6 +35,8 @@ export type ProjectRow = {
   state: string;
   health: string;
   next_action: string | null;
+  outcome_submission_json: string | null;
+  closure_json: string | null;
   version: number;
   updated_at: string;
 };

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FleetApi, FleetApiError, type AgentWorkSnapshot, type Decision, type FleetIdentity, type ProjectCard, type WorkRequest } from "./api";
 import { DecisionsView } from "./views/DecisionsView";
 import { MyWorkView } from "./views/MyWorkView";
@@ -29,6 +29,7 @@ export function App() {
   const [error, setError] = useState<BoardError | null>(null);
   const [loading, setLoading] = useState(true);
   const [projectLoading, setProjectLoading] = useState(false);
+  const projectLoadSequence = useRef(0);
   const [actionPending, setActionPending] = useState(false);
   const [requestDetails, setRequestDetails] = useState<Record<string, WorkRequest>>({});
 
@@ -53,14 +54,18 @@ export function App() {
   useEffect(() => { void load(); }, [load]);
 
   const loadProject = useCallback(async (projectId: string) => {
+    const sequence = ++projectLoadSequence.current;
     setProjectLoading(true);
     setError(null);
     try {
-      setSelectedProject(await api.project(projectId));
+      const project = await api.project(projectId);
+      if (sequence === projectLoadSequence.current) setSelectedProject(project);
     } catch (caught) {
-      setError({ message: caught instanceof FleetApiError ? caught.message : "The project could not be loaded. Retry the request.", scope: "project" });
+      if (sequence === projectLoadSequence.current) {
+        setError({ message: caught instanceof FleetApiError ? caught.message : "The project could not be loaded. Retry the request.", scope: "project" });
+      }
     } finally {
-      setProjectLoading(false);
+      if (sequence === projectLoadSequence.current) setProjectLoading(false);
     }
   }, [api]);
 
@@ -146,6 +151,36 @@ export function App() {
     }
   }, [api]);
 
+  const runProjectAction = useCallback(async (projectId: string, action: () => Promise<ProjectCard>) => {
+    setError(null);
+    const remember = (project: ProjectCard, work?: AgentWorkSnapshot) => {
+      setSelectedProject((current) => current?.id === project.id && current.version <= project.version ? project : current);
+      setData((current) => ({
+        ...current,
+        projects: current.projects.map((known) => known.id === project.id && known.version <= project.version ? project : known),
+        work: work ?? current.work,
+      }));
+    };
+    try {
+      remember(await action());
+    } catch (caught) {
+      if (caught instanceof FleetApiError && [409, 412].includes(caught.status)) {
+        try {
+          remember(await api.project(projectId));
+        } catch {
+          setError({ message: "Current project details could not be refreshed. Reload the project before retrying.", scope: "project" });
+        }
+      }
+      throw caught;
+    }
+    try {
+      const [project, work] = await Promise.all([api.project(projectId), api.myWork()]);
+      remember(project, work);
+    } catch {
+      setError({ message: "The project action was recorded, but current work could not be refreshed. Reload current work to see the latest state.", scope: "global" });
+    }
+  }, [api]);
+
   const loadRequest = useCallback(async (requestId: string) => {
     setActionPending(true);
     setError(null);
@@ -178,7 +213,17 @@ export function App() {
         {loading ? <p role="status">Loading Fleet Board…</p> : null}
         {projectLoading ? <p role="status" aria-label="Loading project details…">Loading project details…</p> : null}
         {!loading && view === "portfolio" ? <PortfolioView projects={data.projects} onSelectProject={(id) => void selectProject(id)} /> : null}
-        {!loading && view === "project" && selectedProject ? <ProjectView project={selectedProject} onBack={() => setView("portfolio")} /> : null}
+        {!loading && view === "project" && selectedProject ? <ProjectView
+          key={selectedProject.id}
+          project={selectedProject}
+          actorId={data.identity?.actor.id ?? ""}
+          ready={selectedProject.id === selectedProjectId && !projectLoading && error?.scope !== "project"}
+          onBack={() => setView("portfolio")}
+          onSubmitOutcome={(input, key) => runProjectAction(selectedProject.id,
+            () => api.submitProjectOutcome(selectedProject.id, selectedProject.version, input, key))}
+          onClose={(input, key) => runProjectAction(selectedProject.id,
+            () => api.closeProject(selectedProject.id, selectedProject.version, input, key))}
+        /> : null}
         {!loading && view === "project" && !selectedProject && !error ? <p>Choose a Fleet Project from the portfolio.</p> : null}
         <div hidden={loading || view !== "my-work"}>
           <MyWorkView
