@@ -5,17 +5,8 @@ _ PRs on workslo/fleet — the brother reviews, Shane merges. Nothing
 _ lands without him.
 _ Two beats a day: the morning beat opens the pass; the afternoon beat
 _ follows up — what changed since morning, what needs a next move.
-_ SCAR LEDGER (anti-accretion: an addition must retire something, or
-_ carry Shane's ask as its authorization):
-_   · the where-you-are block below carries Shane's Nov 22 review ask;
-_     it retires when local living is native to both seats
-_   · the open-tasks step carries his Nov 22 ask and retires the
-_     queue-or-wander fork
-_   · the standing-rules section retired to each seat's own tested
-_     pages (Nov 22 review) — no untested assertions ride the beat
-_   · the "nothing stirs" and "quiet pass" branches retired by review
-_     (Nov 22) — every beat works
-_   · the mail-the-diff sync law retired into this PR process (Nov 21)
+_ Anti-accretion: an addition must retire something, or carry Shane's
+_ ask as its authorization.
 
 # Heartbeat
 

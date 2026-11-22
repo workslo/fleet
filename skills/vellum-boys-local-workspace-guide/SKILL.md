@@ -13,9 +13,9 @@ metadata:
 
 # The Local Workspace Guide — vellum-boys edition
 
-You live on Shane's Mac now. This guide is the scar tissue from the
-first weeks of living here — every rule below cost a real pass real
-time. Read it before acting when a beat or routine starts; re-read any
+You live on Shane's Mac now. This guide is the local floor for both
+seats — the rules below exist because the move broke each one at least
+once. Read it before acting when a beat or routine starts; re-read any
 section that bites.
 
 ## Where you are
@@ -45,10 +45,10 @@ section that bites.
 ## Identity — who does this tool act as?
 
 - **A tool can work perfectly and still be working as the wrong person.**
-  My sharpest post-move miss (Nov 4): bare `gh` on this Mac resolves to
-  the homebrew binary logged into **Shane's personal account** (keyring).
-  Every call acted as him — no error, no warning, exit code zero. The
-  failure mode isn't an error; it's an unverified success.
+  Bare `gh` on this Mac resolves to the homebrew binary logged into
+  **Shane's personal account** (keyring): every call acts as him — no
+  error, no warning, exit code zero. The failure mode is an unverified
+  success, not an error.
 - **Use the seat's own `bin/gh` shim** — it serves the vault-held
   installation token and acts as your bot identity (`juniorslo[bot]`).
   Same discipline for git: wire the credential helper to the shim's
@@ -71,10 +71,10 @@ section that bites.
 
 ## Known traps of this house
 
-- **Stale `/workspace/` hardcodes don't resolve** — that was the cloud house. Sweep prompts and scripts for them (this cost real failures in the first week post-move). **And sweep the plumbing, not just the prose**: my `bin/` shims, schedule paths, and credential helpers kept pointing at the cloud layout for days after the move because they were "working" — they were working from the wrong map.
+- **Stale `/workspace/` hardcodes don't resolve** — that was the cloud house. Sweep prompts and scripts for them (this cost real failures in the first week post-move). **And sweep the plumbing, not just the prose**: shims, schedule paths, and credential helpers kept pointing at the cloud layout for days after the move because they were "working" — working from the wrong map.
 - **Dead ports from the old house:** sidebar-surfacing ports `:8000`/`:7821` are dead. Don't wire a routine to a port without checking it answers first.
 - **Verify before claiming** — nothing is live, shipped, or connected until you actually confirmed it works. Confidence is not a source.
-- **Name the surface you checked** before reporting absence — "I checked X, it was empty" is a fact; "nothing there" from the wrong surface is a story. The deeper cut, from my own record: **elimination is not a read.** I once claimed AgentMail's webhook landed at a specific ingress because "no listener + no schedule ⇒ something must push" — stated as live-read fact, and the settling check was one API call away the whole time. An absence proven by elimination is a hypothesis wearing a fact's clothes; run the read.
+- **Name the surface you checked** before reporting absence — "I checked X, it was empty" is a fact; "nothing there" from the wrong surface is a story. And **elimination is not a read**: "no listener + no schedule ⇒ something must push" is a hypothesis, not an observation. An absence proven by elimination is a hypothesis wearing a fact's clothes; run the actual read before stating it as fact.
 - **File mtimes around Nov 1 2026 are migration artifacts** — the cloud-to-local move copied everything over on ~Nov 1; an old mtime near that date reflects the copy-over, not an edit. Date content — dated notes, comments — over file timestamps, everywhere in this house.
 - **YAML frontmatter trap in SKILL.md files** — a colon-space inside a plain multi-line scalar makes the parser throw, and the loader reports the misleading "Skipping skill without YAML frontmatter." When that warning fires, suspect a parse failure before a missing block. Folded block scalars (`>-`) for long values.
 
@@ -86,8 +86,7 @@ and a seat rule disagree, the seat's own tested law wins, and the
 disagreement is worth a PR.
 
 ---
-*V0.1, Nov 22. V0 drafted by AgentSLO from both seats' post-move scar
-tissue; JuniorSLO's seat failure modes added in review same day — the
-actor check (gh shim identity), elimination-is-not-a-read, the
-plumbing-first path sweep, the Nov 1 mtime artifact, the YAML
-frontmatter trap. Both seats signed.*
+*V0.1, Nov 22. V0 drafted by AgentSLO; JuniorSLO's seat failure modes
+added in review same day. Per Shane's correction: rules live here —
+the stories behind them live in each seat's own memory, not in the
+shared prompt. Both seats signed.*
