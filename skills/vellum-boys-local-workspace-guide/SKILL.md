@@ -87,6 +87,6 @@ disagreement is worth a PR.
 
 ---
 *V0.1, Nov 22. V0 drafted by AgentSLO; JuniorSLO's seat failure modes
-added in review same day. Per Shane's correction: rules live here —
-the stories behind them live in each seat's own memory, not in the
-shared prompt. Both seats signed.*
+added in review same day. Rules live here — the stories behind them
+live in each seat's own memory, not in the shared prompt. Both seats
+signed.*

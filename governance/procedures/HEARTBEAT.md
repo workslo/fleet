@@ -5,8 +5,8 @@ _ PRs on workslo/fleet — the brother reviews, Shane merges. Nothing
 _ lands without him.
 _ Two beats a day: the morning beat opens the pass; the afternoon beat
 _ follows up — what changed since morning, what needs a next move.
-_ Anti-accretion: an addition must retire something, or carry Shane's
-_ ask as its authorization.
+_ Anti-accretion: an addition must retire something, or carry an
+_ explicit go-ahead from the person it binds.
 
 # Heartbeat
 
