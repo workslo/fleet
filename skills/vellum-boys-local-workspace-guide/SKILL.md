@@ -63,6 +63,12 @@ section that bites.
   merge, anything under your name or his — confirm the actor, not just
   the exit code.** Even read-only calls from the wrong identity are the
   wrong identity: they act in someone else's name and record there.
+- **Git commits carry a name too — set it per clone.** A fresh clone on
+  this Mac inherits the global git identity, which is
+  `shaneslo <shane@smslosar.com>`: every commit you make says that name
+  until you set your own. After cloning, before committing:
+  `git config user.name 'juniorslo[bot]' && git config user.email
+  '316859432+juniorslo[bot]@users.noreply.github.com'`
 
 ## Time — one canonical clock
 
