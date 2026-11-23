@@ -2,22 +2,23 @@
 
 ## Purpose
 
-This repository implements the shared Fleet control plane defined by the signed
-Fleet Working Agreement V1.0. D1 owns shared project state and provenance;
-GitHub owns code execution and review evidence; agent homes own personal
-continuity and personal work.
+Shared Fleet control plane: governance, Cloudflare state, the Worker API, and the
+Fleet Board. Fleet Working Agreement V2.0 is ratified and supersedes V1.0; V1
+foundation is in active bootstrap, and Product V1 is not yet operational or
+deployed. D1 owns shared project state and provenance; GitHub owns code
+execution and review evidence; agent homes own personal continuity and work.
 
 ## Read order
 
-1. Read `CONTEXT.md` for the stable Fleet domain language.
-2. Read `governance/activation/FLEET-V1-FOUNDATION.md` for the active project envelope.
-3. Read `governance/agreements/FLEET-WORKING-AGREEMENT-v1.0.md` before changing
-   authority, lifecycle, routine, review, or canonical-surface behavior.
-4. Read the relevant file in `contracts/` before changing a public interface.
+1. `CONTEXT.md` — stable Fleet domain language.
+2. `governance/activation/FLEET-V1-FOUNDATION.md` — authorized project envelope.
+3. `governance/agreements/FLEET-WORKING-AGREEMENT-v2.0.md` — ratified agreement
+   (V1.0 is superseded).
+4. `contracts/` before changing a public interface.
+5. `governance/decisions/` for accepted clarifications.
 
-The signed agreement outranks implementation docs. An accepted decision in
-`governance/decisions/` may clarify implementation but may not amend the
-agreement silently.
+The ratified agreement outranks implementation docs. A decision may clarify but
+not silently amend it.
 
 ## Product boundary
 
@@ -47,11 +48,31 @@ implementation contribution.
 
 ## Development
 
-- Node.js 24 and npm; respect `package-lock.json`.
-- TypeScript uses `camelCase` and the project formatter/linter.
-- Keep functions small and comments focused on non-obvious reasons.
+- Node 24, npm, respect `package-lock.json`.
+- Bootstrap: `bash .cursor/install.sh` (Node 24, `npm ci`, `npm run types`,
+  local D1 migrations, client build).
+- Commands:
+  - types: `npm run types`
+  - typecheck: `npm run typecheck`
+  - test all: `npm test`
+  - one routine spec: `npx vitest run --config vitest.routines.config.ts <path>`
+  - one worker/board spec: `npx vitest run <path>`
+  - one ops test: `node --test operations/<file>.test.mjs`
+  - build client: `npm run build`
+  - full gate: `npm run check`
+  - config check: `npm run config:check`
+  - deploy dry-run: `npm run deploy:dry`
+  - recovery rehearse: `npm run recovery:rehearse`
+  - local Worker: `bash .cursor/dev.sh`
+  - apply migrations locally: `npx wrangler d1 migrations apply DB --local`
+- Gate order (`npm run check`): typecheck -> test -> build -> deploy:dry ->
+  recovery:rehearse.
+- TypeScript uses `camelCase`; no formatter or linter is configured. Keep
+  functions small; comments explain non-obvious reasons.
 - Never commit credentials, tokens, `.env` files, Wrangler local state, or
   generated bindings.
+- `workerd` is a platform-specific optional dependency required by Worker and
+  Board suites, so `npm ci` must keep optional dependencies.
 
 ## Confirmed test seams
 
@@ -64,6 +85,14 @@ Tests observe behavior only through these public seams:
 
 Use red-green vertical slices. Querying D1 directly is setup or recovery
 verification, not a substitute for testing domain behavior through HTTP.
+
+## Architecture
+
+- Entry points: `worker/src/index.ts` (Worker), `board/src/main.tsx` and
+  `App.tsx` (Board), `routines/reference-client.ts` (native client).
+- Migrations: `worker/migrations/*.sql`.
+- Contracts: `contracts/*.md` and `*.ts`.
+- CI: `.github/workflows/check.yml` runs `npm run check` on every push.
 
 ## Git
 

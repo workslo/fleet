@@ -9,8 +9,8 @@ and each agent home remains the continuity surface for personal work.
 
 ## Status
 
-The Fleet Working Agreement V1.0 is accepted. Product V1 is under authorized
-implementation and is not yet operational or deployed.
+The Fleet Working Agreement V2.0 is ratified and supersedes V1.0. Product V1
+foundation is in active bootstrap and is not yet operational or deployed.
 
 Codex is the Project Owner and implementation lead. Shane Slosar remains the
 authorization and acceptance authority.
