@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "../src/App";
 
@@ -84,6 +84,32 @@ describe("Fleet Board", () => {
     expect(screen.getByRole("heading", { name: "Agreed plan" })).toBeVisible();
     expect(screen.getByText("Build the Board")).toBeVisible();
     expect(screen.getByRole("link", { name: "Foundation repository" })).toHaveAttribute("href", "https://github.com/workslo/fleet");
+  });
+
+  it("keeps closeout controls bound to the latest project selection", async () => {
+    const earlier = deferred<Response>();
+    const latest = deferred<Response>();
+    const otherProject = { ...project, id: "project-2", slug: "other-project", title: "Other Fleet Project" };
+    mockApi({ portfolio: { projects: [project, otherProject] } });
+    const fetch = vi.mocked(globalThis.fetch);
+    const originalFetch = fetch.getMockImplementation()!;
+    fetch.mockImplementation((input, init) => {
+      if (input === "/v1/projects/project-1") return earlier.promise;
+      if (input === "/v1/projects/project-2") return latest.promise;
+      return originalFetch(input, init);
+    });
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole("link", { name: "Fleet V1 Foundation" }));
+    await userEvent.click(within(screen.getByRole("navigation", { name: "Fleet Board views" })).getByRole("link", { name: "Portfolio" }));
+    await userEvent.click(await screen.findByRole("link", { name: "Other Fleet Project" }));
+    await act(async () => earlier.resolve(await response(project)));
+    expect(screen.getByRole("heading", { name: "Other Fleet Project" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Submit project outcome" })).not.toBeInTheDocument();
+
+    await act(async () => latest.resolve(await response(otherProject)));
+    expect(await screen.findByRole("button", { name: "Submit project outcome" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Other Fleet Project" })).toBeVisible();
   });
 
   it("separates obligations, outbound requests, inbound requests, and Pull Candidates", async () => {

@@ -16,7 +16,9 @@ All errors have this shape:
 | `POST /v1/projects` | Propose a project with `slug`, `title`, and `originator_id`. |
 | `POST /v1/projects/:id/authorize` | Shane authorizes with `proposed_owner_id`, `outcome`, `scope`, `exclusions`, `delegated_actions`, `gates`, `validation_evidence`, and `plan`. |
 | `POST /v1/projects/:id/owner-accept` | The proposed owner accepts with `{}`. |
-| `GET /v1/projects/:id` | Read one project card. |
+| `POST /v1/projects/:id/submit-outcome` | The owner submits `{ summary, evidence? }` for an Active or Paused project, moving it to Awaiting Acceptance. |
+| `POST /v1/projects/:id/close` | Records `{ disposition, summary, evidence?, within_envelope? }` and moves a project to Closed. Shane may close a project Awaiting Acceptance as Accepted, Failed, or Abandoned. An owner may close as Failed or Abandoned with `within_envelope: true` from Active, Awaiting Acceptance, or Paused. |
+| `GET /v1/projects/:id` | Read one project card, including its outcome submission and closure when recorded. |
 | `POST /v1/projects/:id/requests` | Create a `Pending` Work Request with non-blank `recipient_id`, `title`, and `detail`; `project_id` comes only from the route and caller-identity fields are rejected. `recipient_id` must name an actor other than the caller. |
 | `POST /v1/requests` | Create a `Pending` Work Request with `recipient_id`, `title`, `detail`, optional `artifact: { uri, summary }`, and optional `project_id`; omission or `null` makes it standalone. `recipient_id` must name an actor other than the caller. |
 | `GET /v1/requests/:id` | Read one Work Request, its frozen `accepted_scope`, and fulfillment `evidence`. |
@@ -36,6 +38,17 @@ Mutation requests require an `Idempotency-Key`. Repeating a key with the same
 authenticated actor, request path, method, and payload returns the stored
 response; reuse with a different payload fails. Versioned transitions also
 require `If-Match: "<version>"` set to the current project version.
+
+Project outcome submission and closure each require a quoted project version,
+a non-blank summary (up to 4,000 UTF-8 bytes), and an optional array of up to 20
+evidence links (`{ uri, summary }`). The card exposes `outcome_submission` and
+`closure` only when recorded. Each includes the authenticated actor, timestamp,
+summary, and evidence array. Closure also includes its disposition. For owner
+closeout, `within_envelope: true` records the owner's confirmation that closure
+preserves the authorized scope, Shane-only gates, promised dates, and external
+commitments. Submit the outcome for Shane's decision if closure changes those
+terms. The Worker updates project state, activity, and the replay record in
+one transaction.
 
 All `/v1/*` routes require a verified principal. Production callers send no
 Fleet actor identifier: Cloudflare Access adds `Cf-Access-Jwt-Assertion`, and

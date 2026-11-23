@@ -12,7 +12,7 @@ type Props = {
 };
 
 // An uncertain response keeps the exact submitted payload, version, and key.
-function MutationForm({ label, children, prepare }: {
+export function MutationForm({ label, children, prepare }: {
   label: string;
   children: ReactNode;
   prepare: (data: FormData, key: string) => () => Promise<void>;
@@ -47,13 +47,13 @@ function MutationForm({ label, children, prepare }: {
   </form>;
 }
 
-function evidence(data: FormData) {
+export function evidence(data: FormData) {
   const uri = String(data.get("evidence_uri") ?? "").trim();
   const summary = String(data.get("evidence_summary") ?? "").trim();
   return uri || summary ? [{ uri, summary }] : [];
 }
 
-function OutcomeFields({ prefix }: { prefix: string }) {
+export function OutcomeFields({ prefix }: { prefix: string }) {
   const validatePair = (event: FormEvent<HTMLInputElement>) => {
     const fields = event.currentTarget.form?.elements;
     const uri = fields?.namedItem("evidence_uri");
