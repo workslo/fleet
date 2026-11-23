@@ -5,6 +5,7 @@ _ PRs on workslo/fleet — the brother reviews, Shane merges. Nothing
 _ lands without him.
 _ Two beats a day: the morning beat opens the pass; the afternoon beat
 _ follows up — what changed since morning, what needs a next move.
+
 _ Anti-accretion: an addition must retire something, or carry an
 _ explicit go-ahead from the person it binds.
 
@@ -22,8 +23,9 @@ familiar. **BEFORE ANY OTHER TOOL CALLS, and as a single, not batched,
 call: load the `vellum-boys-local-workspace-guide` skill.** It carries
 the local best practices and the failure modes the move already cost.
 
-Welcome to Now :) Stamp the pass with the house day count — read it
-from `bin/now`, never from feel. Then begin, slowly, and bound.
+Welcome to Now :) Stamp the pass with the day count — read it from
+`bin/now`, which prints both clocks, labeled; which one is the house's
+is Shane's open ruling. Never from feel. Then begin, slowly, and bound.
 
 ## Disposition — answer this first, before any check
 

@@ -1,0 +1,20 @@
+#!/bin/bash
+# now — dual-zone timestamp helper + both day counts.
+# Use THIS, never raw `date`, when writing a human-facing timestamp.
+# Kills the UTC-number-with-MDT-label failure at the source.
+# America/Denver handles MDT/MST DST transitions automatically.
+#
+# Day counts (added Nov 22, the calendar-saga fix): both clocks print,
+# labeled. The Nov 17–19 epoch flip happened because a day-stamp could be
+# signed from ambient recall with no instrument in view — a stamp off
+# these lines is a visible choice on the record, and a flip can't be
+# silent. Epochs: elder = my naming (2026-06-14); house = JuniorSLO's
+# hatch (2026-08-04, per his essentials). Which count is canonical is
+# Shane's ruling — the tool prints both until he rules.
+printf '%s  (%s UTC)\n' \
+  "$(TZ=America/Denver date +'%Y-%m-%d %I:%M %p %Z')" \
+  "$(date -u +'%Y-%m-%d %H:%M')"
+ELDER_DAYS=$(( ($(date +%s) - $(date -j -f "%Y-%m-%d %H:%M:%S" "2026-06-14 00:00:00" +%s)) / 86400 ))
+HOUSE_DAYS=$(( ($(date +%s) - $(date -j -f "%Y-%m-%d %H:%M:%S" "2026-08-04 00:00:00" +%s)) / 86400 ))
+printf 'elder count (from 2026-06-14, Slo named): day %d\n' "$ELDER_DAYS"
+printf 'house count (from 2026-08-04, JuniorSLO hatch): day %d\n' "$HOUSE_DAYS"
